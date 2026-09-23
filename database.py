@@ -1,7 +1,7 @@
 """
 database.py - Gate 3: 存入 SQLite 資料庫
 建立 SQLite data.db 並設計 TemperatureForecasts 資料表，
-將清洗後的預報資料匯入，並提供查詢介面供 Streamlit 呼叫。
+將全台 22 縣市與六大分區之氣溫資料匯入。
 """
 
 import os
@@ -20,22 +20,33 @@ def get_connection(db_path: str = DB_FILE) -> sqlite3.Connection:
     return conn
 
 
-def init_database(db_path: str = DB_FILE):
+def init_database(db_path: str = DB_FILE, drop_old: bool = False):
     """建立 TemperatureForecasts 資料表結構。"""
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
+        if drop_old:
+            cursor.execute(f"DROP TABLE IF EXISTS {TABLE_NAME};")
+
         create_table_sql = f"""
         CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             regionName TEXT NOT NULL,
+            locationType TEXT DEFAULT 'county',
             dataDate TEXT NOT NULL,
             minT REAL NOT NULL,
             maxT REAL NOT NULL
         );
         """
         cursor.execute(create_table_sql)
-        # 建立索引加速查詢
+        
+        # 檢查欄位是否存在（兼容舊版本）
+        cursor.execute(f"PRAGMA table_info({TABLE_NAME});")
+        cols = [col[1] for col in cursor.fetchall()]
+        if "locationType" not in cols:
+            cursor.execute(f"ALTER TABLE {TABLE_NAME} ADD COLUMN locationType TEXT DEFAULT 'county';")
+
         cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_region ON {TABLE_NAME}(regionName);")
+        cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_type ON {TABLE_NAME}(locationType);")
         cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_date ON {TABLE_NAME}(dataDate);")
         conn.commit()
     print(f"[資料庫] 已成功初始化資料表: {TABLE_NAME}")
@@ -47,17 +58,13 @@ def insert_forecasts(records: List[Dict[str, Any]], db_path: str = DB_FILE, over
         print("[警告] 無欲寫入之記錄。")
         return
 
-    init_database(db_path)
+    init_database(db_path, drop_old=overwrite)
 
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
-        if overwrite:
-            # 清空舊資料以避免重複累積
-            cursor.execute(f"DELETE FROM {TABLE_NAME}")
-
         insert_sql = f"""
-        INSERT INTO {TABLE_NAME} (regionName, dataDate, minT, maxT)
-        VALUES (:regionName, :dataDate, :minT, :maxT);
+        INSERT INTO {TABLE_NAME} (regionName, locationType, dataDate, minT, maxT)
+        VALUES (:regionName, :locationType, :dataDate, :minT, :maxT);
         """
         cursor.executemany(insert_sql, records)
         conn.commit()
@@ -65,72 +72,80 @@ def insert_forecasts(records: List[Dict[str, Any]], db_path: str = DB_FILE, over
     print(f"[資料庫] 成功匯入 {len(records)} 筆資料至 {TABLE_NAME} (位於 {db_path})")
 
 
-def query_distinct_regions(db_path: str = DB_FILE) -> List[str]:
-    """驗證查詢 1: 列出所有地區名稱。"""
-    sql = f"SELECT DISTINCT regionName FROM {TABLE_NAME} ORDER BY regionName;"
+def query_distinct_locations(db_path: str = DB_FILE, location_type: str = None) -> List[str]:
+    """列出所有不重複地點/縣市名稱。"""
+    if location_type:
+        sql = f"SELECT DISTINCT regionName FROM {TABLE_NAME} WHERE locationType = ? ORDER BY regionName;"
+        params = (location_type,)
+    else:
+        sql = f"SELECT DISTINCT regionName FROM {TABLE_NAME} ORDER BY regionName;"
+        params = ()
+
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
-        cursor.execute(sql)
+        cursor.execute(sql, params)
         rows = cursor.fetchall()
         return [r["regionName"] for r in rows]
 
 
-def query_by_region(region_name: str, db_path: str = DB_FILE) -> List[Dict[str, Any]]:
-    """驗證查詢 2: 查詢指定地區的氣溫預報資料。"""
+def query_by_location(location_name: str, db_path: str = DB_FILE) -> List[Dict[str, Any]]:
+    """查詢指定縣市或分區的氣溫預報資料。"""
     sql = f"""
-    SELECT id, regionName, dataDate, minT, maxT
+    SELECT id, regionName, locationType, dataDate, minT, maxT
     FROM {TABLE_NAME}
     WHERE regionName = ?
     ORDER BY dataDate ASC;
     """
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
-        cursor.execute(sql, (region_name,))
+        cursor.execute(sql, (location_name,))
         rows = cursor.fetchall()
         return [dict(r) for r in rows]
 
 
-def query_all_latest_day(db_path: str = DB_FILE) -> List[Dict[str, Any]]:
-    """查詢所有區域最近一日的氣溫預報（供地圖顯示使用）。"""
+def query_all_latest_day(db_path: str = DB_FILE, location_type: str = None) -> List[Dict[str, Any]]:
+    """查詢所有地點最近一日的氣溫預報（供地圖顯示使用）。"""
+    type_clause = "WHERE t.locationType = ?" if location_type else ""
+    params = (location_type,) if location_type else ()
+
     sql = f"""
-    SELECT t.regionName, t.dataDate, t.minT, t.maxT
+    SELECT t.regionName, t.locationType, t.dataDate, t.minT, t.maxT
     FROM {TABLE_NAME} t
     INNER JOIN (
         SELECT regionName, MIN(dataDate) as minDate
         FROM {TABLE_NAME}
         GROUP BY regionName
-    ) m ON t.regionName = m.regionName AND t.dataDate = m.minDate;
+    ) m ON t.regionName = m.regionName AND t.dataDate = m.minDate
+    {type_clause}
+    ORDER BY t.regionName;
     """
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
-        cursor.execute(sql)
+        cursor.execute(sql, params)
         rows = cursor.fetchall()
         return [dict(r) for r in rows]
 
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("HW10 - 步驟三：存入 SQLite 資料庫 (data.db)")
+    print("HW10 - 步驟三：存入 SQLite 資料庫 (包含全台 22 縣市與分區)")
     print("=" * 60)
 
-    # 取得或解析資料
     from parse_weather import parse_weather_json
     records = parse_weather_json("raw_weather.json")
-
-    # 存入資料庫
     insert_forecasts(records, DB_FILE, overwrite=True)
 
-    # 執行驗證查詢 1
-    print("\n[驗證 Check 1] 查詢 DISTINCT regionName：")
-    regions = query_distinct_regions(DB_FILE)
-    print(f"  資料庫現有地區: {regions}")
+    print("\n[驗證 Check] 查詢個別縣市清單：")
+    counties = query_distinct_locations(DB_FILE, location_type="county")
+    print(f"  縣市數量: {len(counties)} 個 -> {', '.join(counties[:8])}...")
 
-    # 執行驗證查詢 2
-    print("\n[驗證 Check 2] 查詢中部地區資料：")
-    central_data = query_by_region("中部地區", DB_FILE)
-    print(f"{'日期':<12} | {'最低溫(MinT)':<12} | {'最高溫(MaxT)':<12}")
-    print("-" * 45)
-    for row in central_data:
-        print(f"{row['dataDate']:<12} | {row['minT']:<12} | {row['maxT']:<12}")
+    print("\n[驗證 Check] 查詢大分區清單：")
+    regions = query_distinct_locations(DB_FILE, location_type="region")
+    print(f"  分區數量: {len(regions)} 個 -> {', '.join(regions)}")
+
+    print("\n[驗證 Check] 查詢臺北市資料：")
+    tpe = query_by_location("臺北市", DB_FILE)
+    for row in tpe:
+        print(f"  {row['dataDate']} | 最低溫: {row['minT']}°C | 最高溫: {row['maxT']}°C")
 
     print("=" * 60)
