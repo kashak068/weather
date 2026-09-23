@@ -1,0 +1,26 @@
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment Variables & Keys
+.env
+
+# SQLite Database (optional to ignore or track, recommended to not commit local db directly)
+*.db
+*.sqlite3
+
+# Temporary / Cached Data
+raw_weather.json
+weather_data.csv
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
