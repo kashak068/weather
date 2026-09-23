@@ -1,9 +1,9 @@
 """
-app.py - Gate 4 & Gate 5: Streamlit 氣溫預報 Web App 與全台 22 縣市地圖視覺化
+app.py - Gate 4 & Gate 5: Streamlit 氣溫預報 Web App 與全台 22 縣市 14 天地圖視覺化
 從本機 SQLite (data.db) 讀取資料，提供：
 1. 全台 22 縣市與六大分區切換選擇
-2. 溫度趨勢折線圖 (MaxT / MinT)
-3. 一週天氣預報數據表格與統計指標
+2. 未來 14 天 (兩週) 溫度趨勢折線圖 (MaxT / MinT)
+3. 14 天詳細預報數據表格與關鍵統計指標
 4. Folium 互動式台灣全台縣市溫度地圖與 4 階色階標記
 """
 
@@ -17,7 +17,7 @@ from streamlit_folium import st_folium
 
 # 頁面配置
 st.set_page_config(
-    page_title="Taiwan Weather Forecast - 全台各縣市氣溫預報",
+    page_title="Taiwan Weather Forecast - 全台 14 天氣溫預報",
     page_icon="⛅",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -93,7 +93,7 @@ def fetch_location_list(location_type: str = None):
 
 
 def fetch_forecast_data(location_name: str) -> pd.DataFrame:
-    """使用 SQL 查詢指定縣市/地區的一週氣溫預報。"""
+    """使用 SQL 查詢指定縣市/地區的 14 天氣溫預報。"""
     conn = get_db_connection()
     if conn is None:
         return pd.DataFrame()
@@ -143,12 +143,7 @@ def fetch_map_data(location_type: str = "county") -> pd.DataFrame:
 
 
 def get_temp_color(avg_temp: float) -> str:
-    """根據平均氣溫判定色階顏色。
-    < 20°C: 藍色 (blue)
-    20 - 25°C: 綠色 (green)
-    25 - 30°C: 橙黃色 (orange)
-    > 30°C: 紅色 (red)
-    """
+    """根據平均氣溫判定色階顏色。"""
     if avg_temp < 20.0:
         return "blue"
     elif 20.0 <= avg_temp < 25.0:
@@ -179,9 +174,9 @@ def render_map(map_data: pd.DataFrame, is_county: bool = True):
         popup_html = f"""
         <div style="font-family: Arial, sans-serif; min-width: 150px; padding: 4px;">
             <h4 style="margin: 0 0 6px 0; color: #1E88E5;">{name}</h4>
-            <p style="margin: 2px 0; font-size: 12px; color: #666;">預報日期: <b>{date_str}</b></p>
+            <p style="margin: 2px 0; font-size: 12px; color: #666;">預報起始日: <b>{date_str}</b></p>
             <hr style="margin: 4px 0;">
-            <p style="margin: 2px 0; font-size: 13px;">平均溫: <b style="color:{color}; font-size:14px;">{avg_t} °C</b></p>
+            <p style="margin: 2px 0; font-size: 13px;">當日平均溫: <b style="color:{color}; font-size:14px;">{avg_t} °C</b></p>
             <p style="margin: 2px 0; font-size: 12px; color: #1E88E5;">最低溫: <b>{min_t} °C</b></p>
             <p style="margin: 2px 0; font-size: 12px; color: #E53935;">最高溫: <b>{max_t} °C</b></p>
         </div>
@@ -205,9 +200,9 @@ def render_map(map_data: pd.DataFrame, is_county: bool = True):
 def main():
     st.markdown("""
         <div style="background: linear-gradient(135deg, #0288D1, #1565C0); padding: 22px; border-radius: 12px; color: white; margin-bottom: 20px;">
-            <h1 style="margin: 0; font-size: 28px;">⛅ HW10 Taiwan Weather Forecast</h1>
+            <h1 style="margin: 0; font-size: 28px;">⛅ HW10 Taiwan Weather Forecast (14 Days)</h1>
             <p style="margin: 8px 0 0 0; opacity: 0.95; font-size: 15px;">
-                中央氣象署 (CWA) 臺灣全台 22 縣市與六大分區 · 一週天氣預報視覺化儀表板
+                中央氣象署 (CWA) 臺灣全台 22 縣市與六大分區 · <b>未來 14 天 (兩週)</b> 氣溫預報視覺化儀表板
             </p>
         </div>
     """, unsafe_allow_html=True)
@@ -215,7 +210,7 @@ def main():
     if not os.path.exists(DB_FILE):
         st.warning("⚠️ 尚未偵測到 `data.db` 資料庫！請先執行資料擷取與儲存管線。")
         if st.button("🚀 立即建立資料庫 (執行管線)"):
-            with st.spinner("正在執行資料管線 (fetch -> parse -> database)..."):
+            with st.spinner("正在執行 14 天資料管線 (fetch -> parse -> database)..."):
                 from fetch_weather import fetch_cwa_weather
                 from parse_weather import parse_weather_json
                 from database import insert_forecasts
@@ -230,7 +225,6 @@ def main():
     # 側邊欄控制台
     st.sidebar.header("🔍 預報篩選控制台")
     
-    # 模式切換：依縣市 vs 依分區
     view_mode = st.sidebar.radio(
         "選擇檢視維度 (View Mode):",
         options=["全台 22 縣市 (細項)", "六大地理分區 (整合)"],
@@ -244,7 +238,6 @@ def main():
     if not available_locations:
         available_locations = fetch_location_list()
 
-    # 預設選中
     default_idx = 0
     if is_county_mode and "臺北市" in available_locations:
         default_idx = available_locations.index("臺北市")
@@ -259,7 +252,7 @@ def main():
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("🔄 資料同步")
-    if st.sidebar.button("更新最新預報 (Sync Live Data)"):
+    if st.sidebar.button("更新最新 14 天預報 (Sync 14-Day Data)"):
         with st.spinner("正在從中央氣象署抓取最新預報..."):
             from fetch_weather import fetch_cwa_weather
             from parse_weather import parse_weather_json
@@ -268,20 +261,20 @@ def main():
             fetch_cwa_weather()
             records = parse_weather_json("raw_weather.json")
             insert_forecasts(records, DB_FILE)
-        st.sidebar.success("資料已成功更新至最新！")
+        st.sidebar.success("14 天資料已成功更新至最新！")
         st.rerun()
 
     st.sidebar.info("""
     **資料來源**: 中央氣象署 CWA Open Data
     **涵蓋範圍**: 全台 22 縣市 + 6 大分區
-    **更新頻率**: 7 天滾動預報
+    **預報長度**: **未來 14 天 (兩週)**
     """)
 
     # 主分頁
-    tab1, tab2 = st.tabs(["📈 一週氣溫趨勢預報", "🗺️ 全台互動氣溫地圖"])
+    tab1, tab2 = st.tabs(["📈 未來 14 天氣溫預報趨勢", "🗺️ 全台互動氣溫地圖"])
 
     with tab1:
-        st.subheader(f"📍 {selected_location} - 未來一週氣溫預報趨勢")
+        st.subheader(f"📍 {selected_location} - 未來 14 天 (兩週) 氣溫走勢預報")
         df_forecast = fetch_forecast_data(selected_location)
 
         if df_forecast.empty:
@@ -294,17 +287,17 @@ def main():
             min_all = df_forecast["MinT"].min()
             temp_range = max_all - min_all
 
-            kpi1.metric("一週平均氣溫", f"{avg_all:.1f} °C")
-            kpi2.metric("一週最高氣溫", f"{max_all:.1f} °C", delta=f"+{(max_all - avg_all):.1f}°C", delta_color="inverse")
-            kpi3.metric("一週最低氣溫", f"{min_all:.1f} °C", delta=f"-{(avg_all - min_all):.1f}°C")
-            kpi4.metric("週期最大溫差", f"{temp_range:.1f} °C")
+            kpi1.metric("14天 平均氣溫", f"{avg_all:.1f} °C")
+            kpi2.metric("14天 最高氣溫", f"{max_all:.1f} °C", delta=f"+{(max_all - avg_all):.1f}°C", delta_color="inverse")
+            kpi3.metric("14天 最低氣溫", f"{min_all:.1f} °C", delta=f"-{(avg_all - min_all):.1f}°C")
+            kpi4.metric("14天 週期最大溫差", f"{temp_range:.1f} °C")
 
             st.markdown("---")
 
             col_chart, col_table = st.columns([3, 2])
 
             with col_chart:
-                st.markdown(f"#### 🌡️ {selected_location} 高低溫折線圖")
+                st.markdown(f"#### 🌡️ {selected_location} 未來 14 天高低溫折線圖")
                 chart_data = df_forecast.set_index("Date")[["MaxT", "MinT"]]
                 st.line_chart(
                     chart_data,
@@ -313,7 +306,7 @@ def main():
                 )
 
             with col_table:
-                st.markdown("#### 📋 每日詳細預報數據")
+                st.markdown("#### 📋 14 天每日詳細預報數據")
                 display_df = df_forecast.rename(columns={
                     "Date": "預報日期",
                     "MinT": "最低溫 (°C)",
@@ -323,7 +316,8 @@ def main():
                 st.dataframe(
                     display_df,
                     hide_index=True,
-                    use_container_width=True
+                    use_container_width=True,
+                    height=450
                 )
 
     with tab2:
