@@ -190,8 +190,10 @@ async function loadData() {
     const json = await res.json();
     if (json.success && json.locations) {
       allLocations = json.locations;
+      renderAlerts(json.alerts);
     } else {
       allLocations = json.locations || json || [];
+      renderAlerts(json.alerts);
     }
   } catch (err) {
     console.error("Failed to fetch weather data:", err);
@@ -450,6 +452,8 @@ function renderChartTab(name) {
         <td class="td-min">${f.minT}</td>
         <td class="td-max">${f.maxT}</td>
         <td>${avg}</td>
+        <td>${f.ws || "-"}</td>
+        <td>${f.wd || "-"}</td>
       </tr>`;
     }).join("");
   }
@@ -485,4 +489,25 @@ function generateFallback() {
 function setText(id, text) {
   const el = document.getElementById(id);
   if (el) el.textContent = text;
+}
+
+function renderAlerts(alerts) {
+  const container = document.getElementById("alerts-container");
+  if (!container) return;
+  if (!alerts || !alerts.length) {
+    container.innerHTML = "";
+    return;
+  }
+  
+  container.innerHTML = alerts.map(alert => {
+    const loc = alert.locationName || "未知區域";
+    const phenomena = alert.phenomena || "特報";
+    const text = alert.contentText || "";
+    return `
+      <div style="background-color: #FEE2E2; border-left: 4px solid #EF4444; color: #991B1B; padding: 12px 16px; margin-bottom: 12px; border-radius: 4px; font-size: 14px; font-weight: 500; display: flex; align-items: flex-start; gap: 8px;">
+        <span style="font-size: 16px;">⚠️</span>
+        <div><strong>${loc} ${phenomena}：</strong> ${text}</div>
+      </div>
+    `;
+  }).join("");
 }

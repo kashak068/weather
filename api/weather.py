@@ -247,6 +247,19 @@ def generate_fallback_data():
     return locations_list
 
 
+def fetch_weather_alerts():
+    key = CWA_API_KEY
+    if not key or key == "YOUR_CWA_API_KEY_HERE" or not requests:
+        return []
+    try:
+        url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/W-C0033-002?Authorization={key}&format=JSON"
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            return r.json().get("records", {}).get("record", [])
+    except Exception:
+        pass
+    return []
+
 def fetch_weather_data():
     """主要資料取得函式。"""
     key = CWA_API_KEY
@@ -280,12 +293,14 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
 
         data = fetch_weather_data()
+        alerts = fetch_weather_alerts()
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         response = {
             "success": True,
             "updatedAt": now,
             "totalLocations": len(data),
+            "alerts": alerts,
             "locations": data
         }
 
