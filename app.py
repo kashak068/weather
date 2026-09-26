@@ -252,7 +252,7 @@ def fetch_forecast_data(location_name: str) -> pd.DataFrame:
         return pd.DataFrame()
     try:
         query = f"""
-        SELECT dataDate AS Date, minT AS MinT, maxT AS MaxT
+        SELECT dataDate AS Date, minT AS MinT, maxT AS MaxT, ws AS WS, wd AS WD
         FROM {TABLE_NAME}
         WHERE regionName = ?
         ORDER BY dataDate ASC;
@@ -291,6 +291,23 @@ def fetch_map_data(location_type: str = "county") -> pd.DataFrame:
     finally:
         conn.close()
 
+
+def fetch_weather_alerts():
+    import requests
+    from dotenv import load_dotenv
+    load_dotenv()
+    key = os.environ.get("CWA_API_KEY", "")
+    if not key or key == "YOUR_CWA_API_KEY_HERE":
+        return []
+    try:
+        url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/W-C0033-002?Authorization={key}&format=JSON"
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            return data.get("records", {}).get("record", [])
+    except Exception:
+        pass
+    return []
 
 def get_clean_temp_color(temp: float) -> str:
     """明亮清晰的溫度色階。"""
@@ -515,6 +532,14 @@ def main():
         </div>
     """, unsafe_allow_html=True)
 
+    alerts = fetch_weather_alerts()
+    if alerts:
+        for alert in alerts:
+            loc = alert.get("locationName", "未知區域")
+            phenomena = alert.get("phenomena", "特報")
+            content = alert.get("contentText", "")
+            st.error(f"⚠️ **{loc} {phenomena}**：{content}")
+
     if not os.path.exists(DB_FILE):
         st.warning("⚠️ 尚未偵測到本地資料庫 `data.db`！")
         if st.button("🚀 立即建立資料庫 (執行管線)"):
@@ -693,7 +718,9 @@ def main():
                     "Date": "預報日期",
                     "MinT": "最低溫 (°C)",
                     "MaxT": "最高溫 (°C)",
-                    "AvgT": "平均溫 (°C)"
+                    "AvgT": "平均溫 (°C)",
+                    "WS": "風速",
+                    "WD": "風向"
                 })
                 st.dataframe(
                     display_df,

@@ -38,6 +38,8 @@ def parse_weather_json(json_path: str = INPUT_JSON) -> List[Dict[str, Any]]:
         elements = loc.get("weatherElement", [])
         min_temp_map: Dict[str, float] = {}
         max_temp_map: Dict[str, float] = {}
+        ws_map: Dict[str, str] = {}
+        wd_map: Dict[str, str] = {}
 
         for elem in elements:
             elem_name = elem.get("elementName", "")
@@ -61,6 +63,10 @@ def parse_weather_json(json_path: str = INPUT_JSON) -> List[Dict[str, Any]]:
                     elif elem_name == "MaxT":
                         if date_str not in max_temp_map or temp_val > max_temp_map[date_str]:
                             max_temp_map[date_str] = temp_val
+                    elif elem_name == "WS":
+                        ws_map[date_str] = str(raw_val)
+                    elif elem_name == "WD":
+                        wd_map[date_str] = str(raw_val)
 
         all_dates = sorted(list(set(min_temp_map.keys()) | set(max_temp_map.keys())))
         for d in all_dates:
@@ -79,7 +85,9 @@ def parse_weather_json(json_path: str = INPUT_JSON) -> List[Dict[str, Any]]:
                 "locationType": loc_type,
                 "dataDate": d,
                 "minT": round(min_t, 1),
-                "maxT": round(max_t, 1)
+                "maxT": round(max_t, 1),
+                "ws": ws_map.get(d, "-"),
+                "wd": wd_map.get(d, "-")
             })
 
     save_to_csv(parsed_records, OUTPUT_CSV)
@@ -92,7 +100,7 @@ def save_to_csv(records: List[Dict[str, Any]], csv_path: str = OUTPUT_CSV):
         print("[警告] 無可寫入 CSV 之資料。")
         return
 
-    fieldnames = ["regionName", "locationType", "dataDate", "minT", "maxT"]
+    fieldnames = ["regionName", "locationType", "dataDate", "minT", "maxT", "ws", "wd"]
     with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()

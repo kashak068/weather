@@ -41,7 +41,7 @@ ALL_COUNTIES = [
 ]
 
 
-def extend_to_14_days(min_date_temps: Dict[str, List[float]], max_date_temps: Dict[str, List[float]]) -> List[Dict[str, Any]]:
+def extend_to_14_days(min_date_temps: Dict[str, List[float]], max_date_temps: Dict[str, List[float]], ws_date_vals: Dict[str, List[str]], wd_date_vals: Dict[str, List[str]]) -> List[Dict[str, Any]]:
     """將收集到的預報資料整理並延展至完整的 14 天 (兩週) 預報序列。"""
     existing_dates = sorted(list(set(min_date_temps.keys()) | set(max_date_temps.keys())))
     
@@ -52,6 +52,8 @@ def extend_to_14_days(min_date_temps: Dict[str, List[float]], max_date_temps: Di
 
     min_times = []
     max_times = []
+    ws_times = []
+    wd_times = []
 
     # 計算歷史平均基準供後續天數延展推估
     all_mins = [min(min_date_temps[d]) for d in existing_dates if d in min_date_temps and min_date_temps[d]]
@@ -87,9 +89,22 @@ def extend_to_14_days(min_date_temps: Dict[str, List[float]], max_date_temps: Di
             "elementValue": [{"value": str(day_max), "measures": "攝氏度"}]
         })
 
+        ws_times.append({
+            "startTime": f"{d_str} 06:00:00",
+            "endTime": f"{d_str} 18:00:00",
+            "elementValue": [{"value": ws_date_vals.get(d_str, ["-"])[0]}]
+        })
+        wd_times.append({
+            "startTime": f"{d_str} 06:00:00",
+            "endTime": f"{d_str} 18:00:00",
+            "elementValue": [{"value": wd_date_vals.get(d_str, ["-"])[0]}]
+        })
+
     return [
         {"elementName": "MinT", "description": "最低溫度", "time": min_times},
-        {"elementName": "MaxT", "description": "最高溫度", "time": max_times}
+        {"elementName": "MaxT", "description": "最高溫度", "time": max_times},
+        {"elementName": "WS", "description": "風速", "time": ws_times},
+        {"elementName": "WD", "description": "風向", "time": wd_times}
     ]
 
 
@@ -97,12 +112,16 @@ def parse_location_elements(c_loc: dict) -> List[dict]:
     """從單一縣市原始資料萃取 MinT 與 MaxT 並延展為 14 天序列。"""
     min_date_temps: Dict[str, List[float]] = {}
     max_date_temps: Dict[str, List[float]] = {}
+    ws_date_vals: Dict[str, List[str]] = {}
+    wd_date_vals: Dict[str, List[str]] = {}
 
     for elem in c_loc.get("WeatherElement", []):
         elem_name = elem.get("ElementName", "")
         is_min = elem_name in ["最低溫度", "MinT", "MinTemperature"]
         is_max = elem_name in ["最高溫度", "MaxT", "MaxTemperature"]
-        if not (is_min or is_max):
+        is_ws = elem_name in ["風速", "WS"]
+        is_wd = elem_name in ["風向", "WD"]
+        if not (is_min or is_max or is_ws or is_wd):
             continue
 
         for t in elem.get("Time", []):
@@ -113,6 +132,15 @@ def parse_location_elements(c_loc: dict) -> List[dict]:
                 continue
 
             val_dict = vals[0]
+            if is_ws or is_wd:
+                raw_val = val_dict.get("WindSpeed") or val_dict.get("WindDirection") or val_dict.get("Value") or val_dict.get("value")
+                if raw_val:
+                    if is_ws:
+                        ws_date_vals.setdefault(date_str, []).append(str(raw_val))
+                    else:
+                        wd_date_vals.setdefault(date_str, []).append(str(raw_val))
+                continue
+
             raw_val = None
             for k in ["MinTemperature", "MaxTemperature", "Value", "value", "Temperature"]:
                 if k in val_dict and val_dict[k] not in [None, "", "-"]:
@@ -129,7 +157,7 @@ def parse_location_elements(c_loc: dict) -> List[dict]:
                 except (ValueError, TypeError):
                     continue
 
-    return extend_to_14_days(min_date_temps, max_date_temps)
+    return extend_to_14_days(min_date_temps, max_date_temps, ws_date_vals, wd_date_vals)
 
 
 def transform_cwa_response(cwa_data: dict) -> dict:
@@ -156,6 +184,8 @@ def transform_cwa_response(cwa_data: dict) -> dict:
     for reg_name, county_list in REGION_COUNTY_MAP.items():
         min_date_temps: Dict[str, List[float]] = {}
         max_date_temps: Dict[str, List[float]] = {}
+        ws_date_vals: Dict[str, List[str]] = {}
+        wd_date_vals: Dict[str, List[str]] = {}
 
         for c_name in county_list:
             if c_name not in county_dict:
@@ -165,7 +195,9 @@ def transform_cwa_response(cwa_data: dict) -> dict:
                 elem_name = elem.get("ElementName", "")
                 is_min = elem_name in ["最低溫度", "MinT", "MinTemperature"]
                 is_max = elem_name in ["最高溫度", "MaxT", "MaxTemperature"]
-                if not (is_min or is_max):
+                is_ws = elem_name in ["風速", "WS"]
+                is_wd = elem_name in ["風向", "WD"]
+                if not (is_min or is_max or is_ws or is_wd):
                     continue
 
                 for t in elem.get("Time", []):
@@ -175,6 +207,16 @@ def transform_cwa_response(cwa_data: dict) -> dict:
                     if not vals:
                         continue
                     val_dict = vals[0]
+
+                    if is_ws or is_wd:
+                        raw_val = val_dict.get("WindSpeed") or val_dict.get("WindDirection") or val_dict.get("Value") or val_dict.get("value")
+                        if raw_val:
+                            if is_ws:
+                                ws_date_vals.setdefault(date_str, []).append(str(raw_val))
+                            else:
+                                wd_date_vals.setdefault(date_str, []).append(str(raw_val))
+                        continue
+
                     raw_val = None
                     for k in ["MinTemperature", "MaxTemperature", "Value", "value", "Temperature"]:
                         if k in val_dict and val_dict[k] not in [None, "", "-"]:
@@ -190,7 +232,7 @@ def transform_cwa_response(cwa_data: dict) -> dict:
                         except (ValueError, TypeError):
                             continue
 
-        weather_elements = extend_to_14_days(min_date_temps, max_date_temps)
+        weather_elements = extend_to_14_days(min_date_temps, max_date_temps, ws_date_vals, wd_date_vals)
         locations_list.append({
             "locationName": reg_name,
             "locationType": "region",
@@ -219,6 +261,8 @@ def generate_fallback_data() -> dict:
     for loc_name in all_targets:
         min_times = []
         max_times = []
+        ws_times = []
+        wd_times = []
         for day_offset in range(TARGET_DAYS):
             cur_date = base_date + datetime.timedelta(days=day_offset)
             date_str = cur_date.strftime("%Y-%m-%d")
@@ -236,13 +280,25 @@ def generate_fallback_data() -> dict:
                 "endTime": f"{date_str} 18:00:00",
                 "elementValue": [{"value": str(cur_max), "measures": "攝氏度"}]
             })
+            ws_times.append({
+                "startTime": f"{date_str} 06:00:00",
+                "endTime": f"{date_str} 18:00:00",
+                "elementValue": [{"value": "< 2"}]
+            })
+            wd_times.append({
+                "startTime": f"{date_str} 06:00:00",
+                "endTime": f"{date_str} 18:00:00",
+                "elementValue": [{"value": "偏北風"}]
+            })
 
         locations_list.append({
             "locationName": loc_name,
             "locationType": "county" if loc_name in ALL_COUNTIES else "region",
             "weatherElement": [
                 {"elementName": "MinT", "description": "最低溫度", "time": min_times},
-                {"elementName": "MaxT", "description": "最高溫度", "time": max_times}
+                {"elementName": "MaxT", "description": "最高溫度", "time": max_times},
+                {"elementName": "WS", "description": "風速", "time": ws_times},
+                {"elementName": "WD", "description": "風向", "time": wd_times}
             ]
         })
 

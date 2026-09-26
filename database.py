@@ -34,7 +34,9 @@ def init_database(db_path: str = DB_FILE, drop_old: bool = False):
             locationType TEXT DEFAULT 'county',
             dataDate TEXT NOT NULL,
             minT REAL NOT NULL,
-            maxT REAL NOT NULL
+            maxT REAL NOT NULL,
+            ws TEXT DEFAULT '',
+            wd TEXT DEFAULT ''
         );
         """
         cursor.execute(create_table_sql)
@@ -63,8 +65,8 @@ def insert_forecasts(records: List[Dict[str, Any]], db_path: str = DB_FILE, over
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
         insert_sql = f"""
-        INSERT INTO {TABLE_NAME} (regionName, locationType, dataDate, minT, maxT)
-        VALUES (:regionName, :locationType, :dataDate, :minT, :maxT);
+        INSERT INTO {TABLE_NAME} (regionName, locationType, dataDate, minT, maxT, ws, wd)
+        VALUES (:regionName, :locationType, :dataDate, :minT, :maxT, :ws, :wd);
         """
         cursor.executemany(insert_sql, records)
         conn.commit()
@@ -91,7 +93,7 @@ def query_distinct_locations(db_path: str = DB_FILE, location_type: str = None) 
 def query_by_location(location_name: str, db_path: str = DB_FILE) -> List[Dict[str, Any]]:
     """查詢指定縣市或分區的氣溫預報資料。"""
     sql = f"""
-    SELECT id, regionName, locationType, dataDate, minT, maxT
+    SELECT id, regionName, locationType, dataDate, minT, maxT, ws, wd
     FROM {TABLE_NAME}
     WHERE regionName = ?
     ORDER BY dataDate ASC;
@@ -109,7 +111,7 @@ def query_all_latest_day(db_path: str = DB_FILE, location_type: str = None) -> L
     params = (location_type,) if location_type else ()
 
     sql = f"""
-    SELECT t.regionName, t.locationType, t.dataDate, t.minT, t.maxT
+    SELECT t.regionName, t.locationType, t.dataDate, t.minT, t.maxT, t.ws, t.wd
     FROM {TABLE_NAME} t
     INNER JOIN (
         SELECT regionName, MIN(dataDate) as minDate
