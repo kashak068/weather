@@ -1,0 +1,9 @@
+{
+  "version": 2,
+
+  "routes": [
+    { "src": "/api/weather", "dest": "/api/weather.py" },
+    { "src": "/api/(.*)",    "dest": "/api/$1.py" },
+    { "src": "/(.*)",        "dest": "/public/$1" }
+  ]
+}

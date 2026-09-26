@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Taiwan Weather Forecast — 臺灣氣候觀測與預報</title>
+    <meta name="description" content="臺灣全台 22 縣市與六大分區 · 未來 14 天氣象預報視覺化儀表板。資料來源：交通部中央氣象署 (CWA)。">
+    <meta name="keywords" content="台灣天氣,天氣預報,氣溫,14天預報,中央氣象署,Taiwan Weather">
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- ═══════════ Loading Overlay ═══════════ -->
+    <div id="loading-overlay" class="loading-overlay">
+        <div class="loading-spinner">
+            <div class="spinner-ring"></div>
+            <p class="loading-text">正在載入氣象資料...</p>
+        </div>
+    </div>
+
+    <!-- ═══════════ Header Banner ═══════════ -->
+    <header class="weather-banner" id="header-banner">
+        <div class="banner-left">
+            <h1 class="banner-title">
+                <span class="banner-icon">🌤️</span>
+                Taiwan Weather Forecast
+            </h1>
+            <p class="banner-subtitle">交通部中央氣象署 (CWA) 臺灣全台 22 縣市與分區 · 未來 14 天氣象預報</p>
+        </div>
+        <div class="banner-right">
+            <span class="status-pill" id="status-pill">
+                <span class="green-dot"></span>
+                CWA API ONLINE
+            </span>
+            <p class="banner-time" id="banner-time">資料時間: --</p>
+        </div>
+    </header>
+
+    <!-- ═══════════ Main Layout ═══════════ -->
+    <main class="main-container">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-section">
+                <h3 class="sidebar-heading">🔍 預報篩選控制台</h3>
+
+                <label class="control-label">選擇檢視維度 (View Mode)</label>
+                <div class="radio-group" id="view-mode-group">
+                    <label class="radio-option active" data-value="county">
+                        <input type="radio" name="view-mode" value="county" checked>
+                        <span class="radio-dot"></span>
+                        全台 22 縣市 (細項觀測)
+                    </label>
+                    <label class="radio-option" data-value="region">
+                        <input type="radio" name="view-mode" value="region">
+                        <span class="radio-dot"></span>
+                        六大地理分區 (整合預報)
+                    </label>
+                </div>
+
+                <label class="control-label" id="location-label">選擇觀測地點 (縣市)</label>
+                <div class="select-wrapper">
+                    <select class="location-select" id="location-select">
+                        <option value="">載入中...</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="sidebar-divider"></div>
+
+            <div class="sidebar-section">
+                <h3 class="sidebar-heading">🔄 資料同步</h3>
+                <button class="sync-button" id="sync-btn" onclick="syncData()">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M13.65 2.35A8 8 0 1 0 16 8h-2a6 6 0 1 1-1.76-4.24L10 6h6V0l-2.35 2.35z" fill="currentColor"/></svg>
+                    同步氣象署最新資料
+                </button>
+            </div>
+
+            <div class="sidebar-divider"></div>
+
+            <div class="sidebar-info">
+                <p><strong>資料來源</strong>: 交通部中央氣象署 (CWA)</p>
+                <p><strong>涵蓋範圍</strong>: 全台 22 縣市 + 大分區</p>
+                <p><strong>預報長度</strong>: 未來 14 天 (兩週) 滾動預報</p>
+            </div>
+        </aside>
+
+        <!-- Content Area -->
+        <section class="content-area">
+            <!-- Tab Navigation -->
+            <div class="tab-nav" id="tab-nav">
+                <button class="tab-btn active" data-tab="map-tab" id="tab-btn-map">
+                    🗺️ 全台氣溫地圖視覺化
+                </button>
+                <button class="tab-btn" data-tab="chart-tab" id="tab-btn-chart">
+                    📈 14 天氣溫走勢與詳細數據
+                </button>
+            </div>
+
+            <!-- Tab: Map -->
+            <div class="tab-content active" id="map-tab">
+                <h2 class="section-title" id="map-title">📍 臺灣全台 22 縣市即時氣溫分布圖</h2>
+                <div class="map-layout">
+                    <div class="map-container">
+                        <div id="weather-map" class="weather-map"></div>
+                    </div>
+                    <div class="map-sidebar">
+                        <!-- Legend -->
+                        <div class="clean-card">
+                            <div class="card-title">🌡️ 氣溫色階圖例</div>
+                            <div class="temp-bar-gradient"></div>
+                            <div class="temp-bar-labels">
+                                <span>&lt;18°C (涼冷)</span>
+                                <span>23°C (舒適)</span>
+                                <span>&gt;28°C (炎熱)</span>
+                            </div>
+                            <hr class="card-divider">
+                            <div class="card-hint">
+                                💡 <b>操作說明</b>：<br>
+                                地圖標記顯示各地氣溫數值，點擊任一標記可查看最高溫與最低溫資訊。
+                            </div>
+                        </div>
+                        <!-- Current Selection Card -->
+                        <div class="clean-card" id="selected-card" style="display:none;">
+                            <div class="selected-label">當前選定觀測點</div>
+                            <div class="selected-name" id="selected-name">--</div>
+                            <div class="selected-temp" id="selected-temp">--</div>
+                            <div class="selected-range">
+                                <span>最低溫: <b class="temp-low" id="selected-min">--</b></span>
+                                <span>最高溫: <b class="temp-high" id="selected-max">--</b></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: Chart -->
+            <div class="tab-content" id="chart-tab">
+                <h2 class="section-title" id="chart-title">📍 -- · 未來 14 天高低溫走勢</h2>
+
+                <!-- KPI Cards -->
+                <div class="kpi-row" id="kpi-row">
+                    <div class="kpi-card">
+                        <div class="kpi-label">14天 平均氣溫</div>
+                        <div class="kpi-value" id="kpi-avg">--</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">14天 最高溫</div>
+                        <div class="kpi-value kpi-hot" id="kpi-max">--</div>
+                        <div class="kpi-delta kpi-delta-hot" id="kpi-max-delta"></div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">14天 最低溫</div>
+                        <div class="kpi-value kpi-cold" id="kpi-min">--</div>
+                        <div class="kpi-delta kpi-delta-cold" id="kpi-min-delta"></div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">週期最大溫差</div>
+                        <div class="kpi-value" id="kpi-range">--</div>
+                    </div>
+                </div>
+
+                <div class="chart-divider"></div>
+
+                <div class="chart-layout">
+                    <div class="chart-container">
+                        <h3 class="chart-subtitle" id="chart-subtitle">🌡️ -- 14 天雙曲線走勢圖</h3>
+                        <div class="chart-wrapper">
+                            <canvas id="temp-chart"></canvas>
+                        </div>
+                    </div>
+                    <div class="table-container">
+                        <h3 class="chart-subtitle">📋 14 天每日預報清單</h3>
+                        <div class="table-wrapper">
+                            <table class="forecast-table" id="forecast-table">
+                                <thead>
+                                    <tr>
+                                        <th>預報日期</th>
+                                        <th>最低溫 (°C)</th>
+                                        <th>最高溫 (°C)</th>
+                                        <th>平均溫 (°C)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="forecast-tbody">
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Mobile sidebar toggle -->
+    <button class="mobile-sidebar-toggle" id="mobile-toggle" onclick="toggleSidebar()">
+        ☰
+    </button>
+
+    <script src="app.js"></script>
+</body>
+</html>

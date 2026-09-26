@@ -24,3 +24,5 @@ weather_data.csv
 .idea/
 .DS_Store
 Thumbs.db
+
+.vercel

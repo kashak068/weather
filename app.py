@@ -1,6 +1,6 @@
 """
-app.py - HW10 Taiwan Weather Forecast (清爽現代明亮風格)
-技術棧: Streamlit × SQLite (data.db) × Folium × 現代清晰卡片設計
+app.py - HW10 Taiwan Weather Forecast (Google Maps 風格)
+技術棧: Streamlit × SQLite (data.db) × Folium (Google Maps 圖磚) × 現代清晰卡片設計
 """
 
 import datetime
@@ -59,6 +59,53 @@ REGION_COORDINATES = {
     "東南部地區": (22.75, 121.15),
     "離島地區": (24.00, 119.00),
 }
+
+# 縣市依地理分區排序 (北部 → 中部 → 南部 → 東部 → 離島)
+COUNTY_REGION_ORDER = {
+    # 北部
+    "基隆市": (0, 0), "臺北市": (0, 1), "新北市": (0, 2),
+    "桃園市": (0, 3), "新竹市": (0, 4), "新竹縣": (0, 5),
+    # 中部
+    "苗栗縣": (1, 0), "臺中市": (1, 1), "彰化縣": (1, 2),
+    "南投縣": (1, 3), "雲林縣": (1, 4),
+    # 南部
+    "嘉義市": (2, 0), "嘉義縣": (2, 1), "臺南市": (2, 2),
+    "高雄市": (2, 3), "屏東縣": (2, 4),
+    # 東部
+    "宜蘭縣": (3, 0), "花蓮縣": (3, 1), "臺東縣": (3, 2),
+    # 離島
+    "澎湖縣": (4, 0), "金門縣": (4, 1), "連江縣": (4, 2),
+}
+
+REGION_GROUP_ORDER = {
+    "北部地區": (0, 0),
+    "中部地區": (1, 0),
+    "南部地區": (2, 0),
+    "東北部地區": (3, 0), "東部地區": (3, 1), "東南部地區": (3, 2),
+    "離島地區": (4, 0),
+}
+
+COUNTY_REGION_LABELS = {
+    0: "── 北部 ──",
+    1: "── 中部 ──",
+    2: "── 南部 ──",
+    3: "── 東部 ──",
+    4: "── 離島 ──",
+}
+
+REGION_GROUP_LABELS = {
+    0: "── 北部 ──",
+    1: "── 中部 ──",
+    2: "── 南部 ──",
+    3: "── 東部 ──",
+    4: "── 離島 ──",
+}
+
+
+def sort_locations_by_region(locations: list, is_county: bool = True) -> list:
+    """依地理分區排序地點清單。"""
+    order_dict = COUNTY_REGION_ORDER if is_county else REGION_GROUP_ORDER
+    return sorted(locations, key=lambda loc: order_dict.get(loc, (99, 99)))
 
 
 def apply_custom_css():
@@ -258,17 +305,31 @@ def get_clean_temp_color(temp: float) -> str:
 
 
 def render_clean_map(map_data: pd.DataFrame, is_county: bool = True):
-    """繪製明亮乾淨的 CartoDB Positron 互動地圖。"""
+    """繪製 Google Maps 風格互動地圖。"""
     coords_dict = COUNTY_COORDINATES if is_county else REGION_COORDINATES
-    
-    # 使用清晰明亮的淺色底圖
+
+    # Google Maps 風格底圖 (使用 Google 地圖圖磚)
     m = folium.Map(
         location=[23.75, 120.95],
         zoom_start=7 if not is_county else 7.5,
-        tiles="CartoDB positron",
-        control_scale=True
+        tiles=None,
+        control_scale=True,
+        zoom_control=True,
     )
-    Fullscreen().add_to(m)
+
+    # Google Maps road map tiles
+    folium.TileLayer(
+        tiles="https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}",
+        attr="Google Maps",
+        name="Google Maps",
+        max_zoom=20,
+    ).add_to(m)
+
+    Fullscreen(
+        position="topright",
+        title="全螢幕",
+        title_cancel="退出全螢幕",
+    ).add_to(m)
 
     for _, row in map_data.iterrows():
         name = row["regionName"]
@@ -282,60 +343,148 @@ def render_clean_map(map_data: pd.DataFrame, is_county: bool = True):
         date_str = row["dataDate"]
         color = get_clean_temp_color(avg_t)
 
-        # 乾淨清晰的數值徽章標籤 (DivIcon)
+        # Google Maps 風格圖釘標記 + 溫度標籤
+        # 佈局高度計算: 標籤~22px + 間距4px + 三角8px + 間距2px + 圓點12px = ~48px
+        # icon_size 設定固定容器，icon_anchor 指向底部圓點中心 (錨定地理座標)
         icon_html = f"""
         <div style="
+            width: 150px;
+            height: 48px;
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
-            transform: translate(-50%, -50%);
+            justify-content: flex-end;
+            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
+            cursor: pointer;
         ">
             <div style="
-                background: {color};
-                color: #FFFFFF;
-                font-weight: 700;
-                font-size: 11px;
-                padding: 3px 8px;
-                border-radius: 12px;
-                box-shadow: 0 2px 5px rgba(0,0,0,0.25);
-                border: 2px solid #FFFFFF;
+                background: #FFFFFF;
+                color: #3C4043;
+                font-family: 'Google Sans', Roboto, Arial, sans-serif;
+                font-weight: 500;
+                font-size: 12px;
+                padding: 4px 10px;
+                border-radius: 16px;
                 white-space: nowrap;
+                box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+                border: 1px solid #DADCE0;
+                line-height: 1.3;
             ">
-                {avg_t}°
+                <span style="font-weight: 700; color: {color};">{avg_t}°</span>
+                <span style="color: #5F6368; font-size: 11px; margin-left: 2px;">{name}</span>
             </div>
             <div style="
-                color: #1E293B;
-                font-size: 11px;
-                font-weight: 600;
-                margin-top: 2px;
-                white-space: nowrap;
-                background: rgba(255,255,255,0.85);
-                padding: 1px 4px;
-                border-radius: 4px;
-                border: 1px solid #CBD5E1;
-            ">
-                {name}
-            </div>
+                width: 0;
+                height: 0;
+                border-left: 6px solid transparent;
+                border-right: 6px solid transparent;
+                border-top: 8px solid #FFFFFF;
+            "></div>
+            <div style="
+                width: 8px;
+                height: 8px;
+                border-radius: 50%;
+                background: {color};
+                border: 2px solid #FFFFFF;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+            "></div>
         </div>
         """
 
+        # Google Maps 風格 Popup 卡片
         popup_html = f"""
-        <div style="font-family: Arial, sans-serif; padding: 10px; min-width: 160px;">
-            <h4 style="margin: 0 0 4px 0; color: #1E293B; font-size: 15px;">📍 {name}</h4>
-            <p style="margin: 0 0 8px 0; font-size: 12px; color: #64748B;">日期: {date_str}</p>
-            <div style="background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 8px;">
-                <p style="margin: 2px 0; font-size: 13px;">平均溫: <b style="color:{color}; font-size: 15px;">{avg_t} °C</b></p>
-                <p style="margin: 2px 0; font-size: 12px; color: #2563EB;">最低溫: <b>{min_t} °C</b></p>
-                <p style="margin: 2px 0; font-size: 12px; color: #DC2626;">最高溫: <b>{max_t} °C</b></p>
+        <div style="
+            font-family: 'Google Sans', Roboto, Arial, sans-serif;
+            padding: 0;
+            min-width: 220px;
+            max-width: 280px;
+        ">
+            <div style="
+                padding: 12px 16px 8px 16px;
+                border-bottom: 1px solid #E8EAED;
+            ">
+                <div style="
+                    font-size: 16px;
+                    font-weight: 500;
+                    color: #202124;
+                    margin: 0 0 2px 0;
+                    line-height: 1.3;
+                ">{name}</div>
+                <div style="
+                    font-size: 12px;
+                    color: #70757A;
+                    margin: 0;
+                ">氣象預報 · {date_str}</div>
+            </div>
+            <div style="padding: 12px 16px;">
+                <div style="
+                    display: flex;
+                    align-items: baseline;
+                    margin-bottom: 10px;
+                ">
+                    <span style="
+                        font-size: 36px;
+                        font-weight: 400;
+                        color: #202124;
+                        line-height: 1;
+                    ">{avg_t}</span>
+                    <span style="
+                        font-size: 18px;
+                        color: #70757A;
+                        margin-left: 2px;
+                    ">°C</span>
+                    <span style="
+                        display: inline-block;
+                        width: 10px;
+                        height: 10px;
+                        border-radius: 50%;
+                        background: {color};
+                        margin-left: 8px;
+                    "></span>
+                </div>
+                <div style="
+                    display: flex;
+                    gap: 16px;
+                    font-size: 13px;
+                    color: #3C4043;
+                ">
+                    <div>
+                        <span style="color: #70757A;">低溫</span><br>
+                        <span style="font-weight: 500; color: #1A73E8;">{min_t}°C</span>
+                    </div>
+                    <div>
+                        <span style="color: #70757A;">高溫</span><br>
+                        <span style="font-weight: 500; color: #EA4335;">{max_t}°C</span>
+                    </div>
+                    <div>
+                        <span style="color: #70757A;">溫差</span><br>
+                        <span style="font-weight: 500; color: #3C4043;">{max_t - min_t:.1f}°C</span>
+                    </div>
+                </div>
+            </div>
+            <div style="
+                padding: 8px 16px;
+                border-top: 1px solid #E8EAED;
+                text-align: right;
+            ">
+                <span style="
+                    font-size: 11px;
+                    color: #1A73E8;
+                    font-weight: 500;
+                    cursor: pointer;
+                ">查看詳細預報 →</span>
             </div>
         </div>
         """
 
         folium.Marker(
             location=coords,
-            icon=folium.DivIcon(html=icon_html),
-            popup=folium.Popup(popup_html, max_width=240),
+            icon=folium.DivIcon(
+                html=icon_html,
+                icon_size=(150, 48),
+                icon_anchor=(75, 48),
+            ),
+            popup=folium.Popup(popup_html, max_width=300),
             tooltip=f"{name}: {avg_t}°C (低溫 {min_t}°C / 高溫 {max_t}°C)",
         ).add_to(m)
 
@@ -395,17 +544,43 @@ def main():
     if not available_locations:
         available_locations = fetch_location_list()
 
+    # 依地理分區排序 (北部 → 中部 → 南部 → 東部 → 離島)
+    available_locations = sort_locations_by_region(available_locations, is_county=is_county_mode)
+
     default_idx = 0
     if is_county_mode and "臺北市" in available_locations:
         default_idx = available_locations.index("臺北市")
-    elif not is_county_mode and "中部地區" in available_locations:
-        default_idx = available_locations.index("中部地區")
+    elif not is_county_mode and "北部地區" in available_locations:
+        default_idx = available_locations.index("北部地區")
 
+    # 產生帶分區標頭的格式化顯示名稱
+    order_dict = COUNTY_REGION_ORDER if is_county_mode else REGION_GROUP_ORDER
+    labels = COUNTY_REGION_LABELS if is_county_mode else REGION_GROUP_LABELS
+    display_options = []
+    seen_groups = set()
+    for loc in available_locations:
+        group_id = order_dict.get(loc, (99, 99))[0]
+        if group_id not in seen_groups:
+            seen_groups.add(group_id)
+            label = labels.get(group_id, "")
+            if label:
+                display_options.append(label)
+        display_options.append(loc)
+
+    # 側邊欄分區顯示標頭 (用 markdown 呈現)
     selected_location = st.sidebar.selectbox(
         f"選擇觀測地點 ({'縣市' if is_county_mode else '分區'}):",
-        options=available_locations,
-        index=default_idx
+        options=display_options,
+        index=display_options.index(available_locations[default_idx]) if available_locations else 0,
     )
+
+    # 若選到分隔標頭，自動導向該區第一個地點
+    if selected_location.startswith("──"):
+        group_label = selected_location
+        # 找到該標頭後面的第一個實際地點
+        idx = display_options.index(group_label)
+        if idx + 1 < len(display_options):
+            selected_location = display_options[idx + 1]
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 🔄 資料同步")
