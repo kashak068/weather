@@ -1,22 +1,24 @@
 """
 api/weather.py - Vercel Serverless Function
-提供 CWA 天氣預報 API 端點，回傳全台 22 縣市 + 六大分區 14 天氣溫資料。
+提供 CWA 天氣預報 API 端點，回傳全台 22 縣市 + 六大分區 14 天氣溫、風速風向及特報資料。
+使用 Python 原生 urllib.request，無任何外部相依性，確保在 Vercel 雲端環境穩定執行。
 """
 
 import datetime
 import json
 import os
+import urllib.request
+import urllib.error
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
-try:
-    import requests
-except ImportError:
-    requests = None
-
 # ── API 設定 ──────────────────────────────────────────
-CWA_API_KEY = os.environ.get("CWA_API_KEY", "").strip()
+# 若環境變數未設定，使用預設 CWA 金鑰確保 API 不中斷
+DEFAULT_CWA_KEY = "CWA-77CABAA6-1A23-482A-8B46-7FD6A9EBC814"
+CWA_API_KEY = os.environ.get("CWA_API_KEY", "").strip() or DEFAULT_CWA_KEY
+
 URL_COUNTIES = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-D0047-091"
+URL_ALERTS = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/W-C0033-002"
 TARGET_DAYS = 14
 
 # 六大目標區域與對應縣市
@@ -37,6 +39,18 @@ ALL_COUNTIES = [
     "宜蘭縣", "花蓮縣", "臺東縣",
     "澎湖縣", "金門縣", "連江縣"
 ]
+
+
+def http_get_json(url: str, timeout: int = 15):
+    """使用 Python 原生 urllib 取得 JSON 資料。"""
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) WeatherApp/2.0"}
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        if resp.status == 200:
+            return json.loads(resp.read().decode("utf-8"))
+    return None
 
 
 # ── 資料處理函式 ──────────────────────────────────────
@@ -71,19 +85,22 @@ def extend_to_14_days(min_date_temps, max_date_temps, ws_date_vals, wd_date_vals
             cycle_var = ((day_idx % 4) - 1.5) * 0.8
             day_max = round(base_max + cycle_var, 1)
 
+        ws_val = ws_date_vals.get(d_str, ["-"])[0] if ws_date_vals else "-"
+        wd_val = wd_date_vals.get(d_str, ["-"])[0] if wd_date_vals else "-"
+
         results.append({
             "date": d_str,
             "minT": day_min,
             "maxT": day_max,
-            "ws": ws_date_vals.get(d_str, ["-"])[0] if ws_date_vals else "-",
-            "wd": wd_date_vals.get(d_str, ["-"])[0] if wd_date_vals else "-"
+            "ws": ws_val,
+            "wd": wd_val
         })
 
     return results
 
 
 def parse_location_elements(c_loc):
-    """從單一縣市萃取 MinT / MaxT 並延展為 14 天。"""
+    """從單一縣市萃取 MinT / MaxT / WS / WD 並延展為 14 天。"""
     min_date_temps = {}
     max_date_temps = {}
     ws_date_vals = {}
@@ -104,18 +121,23 @@ def parse_location_elements(c_loc):
             vals = t.get("ElementValue", [])
             if not vals:
                 continue
-            
+
             val_dict = vals[0]
-            
-            if is_ws or is_wd:
-                raw_val = val_dict.get("WindSpeed") or val_dict.get("WindDirection") or val_dict.get("Value") or val_dict.get("value")
-                if raw_val:
-                    if is_ws:
-                        ws_date_vals.setdefault(date_str, []).append(str(raw_val))
-                    else:
-                        wd_date_vals.setdefault(date_str, []).append(str(raw_val))
+
+            if is_ws:
+                speed = val_dict.get("WindSpeed") or val_dict.get("Value") or val_dict.get("value")
+                scale = val_dict.get("BeaufortScale")
+                if speed:
+                    formatted_ws = f"{speed} m/s ({scale}級)" if scale else f"{speed} m/s"
+                    ws_date_vals.setdefault(date_str, []).append(formatted_ws)
                 continue
-            
+
+            if is_wd:
+                direction = val_dict.get("WindDirection") or val_dict.get("Value") or val_dict.get("value")
+                if direction:
+                    wd_date_vals.setdefault(date_str, []).append(str(direction))
+                continue
+
             raw_val = None
             for k in ["MinTemperature", "MaxTemperature", "Value", "value", "Temperature"]:
                 if k in val_dict and val_dict[k] not in [None, "", "-"]:
@@ -139,7 +161,7 @@ def transform_cwa_response(cwa_data):
     """將 CWA API 回傳轉為結構化 JSON。"""
     try:
         raw_locs = cwa_data["records"]["Locations"][0]["Location"]
-    except (KeyError, IndexError):
+    except (KeyError, IndexError, TypeError):
         return None
 
     county_dict = {loc["LocationName"]: loc for loc in raw_locs}
@@ -181,16 +203,21 @@ def transform_cwa_response(cwa_data):
                     if not vals:
                         continue
                     val_dict = vals[0]
-                    
-                    if is_ws or is_wd:
-                        raw_val = val_dict.get("WindSpeed") or val_dict.get("WindDirection") or val_dict.get("Value") or val_dict.get("value")
-                        if raw_val:
-                            if is_ws:
-                                ws_date_vals.setdefault(date_str, []).append(str(raw_val))
-                            else:
-                                wd_date_vals.setdefault(date_str, []).append(str(raw_val))
+
+                    if is_ws:
+                        speed = val_dict.get("WindSpeed") or val_dict.get("Value") or val_dict.get("value")
+                        scale = val_dict.get("BeaufortScale")
+                        if speed:
+                            formatted_ws = f"{speed} m/s ({scale}級)" if scale else f"{speed} m/s"
+                            ws_date_vals.setdefault(date_str, []).append(formatted_ws)
                         continue
-                        
+
+                    if is_wd:
+                        direction = val_dict.get("WindDirection") or val_dict.get("Value") or val_dict.get("value")
+                        if direction:
+                            wd_date_vals.setdefault(date_str, []).append(str(direction))
+                        continue
+
                     raw_val = None
                     for k in ["MinTemperature", "MaxTemperature", "Value", "value", "Temperature"]:
                         if k in val_dict and val_dict[k] not in [None, "", "-"]:
@@ -234,8 +261,8 @@ def generate_fallback_data():
                 "date": date_str,
                 "minT": cur_min,
                 "maxT": cur_max,
-                "ws": "< 2",
-                "wd": "偏北風"
+                "ws": "3 m/s (2級)",
+                "wd": "偏東風"
             })
 
         locations_list.append({
@@ -248,58 +275,88 @@ def generate_fallback_data():
 
 
 def fetch_weather_alerts():
-    key = CWA_API_KEY
-    if not key or key == "YOUR_CWA_API_KEY_HERE" or not requests:
-        return []
+    """從 CWA 取得即時天氣特報 (W-C0033-002)。"""
+    url = f"{URL_ALERTS}?Authorization={CWA_API_KEY}&format=JSON"
     try:
-        url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/W-C0033-002?Authorization={key}&format=JSON"
-        r = requests.get(url, timeout=10)
-        if r.status_code == 200:
-            return r.json().get("records", {}).get("record", [])
+        data = http_get_json(url, timeout=10)
+        if data:
+            records = data.get("records", {}).get("record", [])
+            # 整理特報格式
+            formatted_alerts = []
+            for r in records:
+                formatted_alerts.append({
+                    "locationName": r.get("locationName", "全台/各縣市"),
+                    "phenomena": r.get("phenomena", "天氣特報"),
+                    "significance": r.get("significance", ""),
+                    "contentText": r.get("contentText", r.get("contents", "")),
+                    "startTime": r.get("startTime", ""),
+                    "endTime": r.get("endTime", "")
+                })
+            return formatted_alerts
     except Exception:
         pass
     return []
 
-def fetch_weather_data():
-    """主要資料取得函式。"""
-    key = CWA_API_KEY
-    data = None
 
-    if requests and key and key != "YOUR_CWA_API_KEY_HERE":
-        try:
-            params = {"Authorization": key, "format": "JSON"}
-            resp = requests.get(URL_COUNTIES, params=params, timeout=20)
-            if resp.status_code == 200:
-                cwa_json = resp.json()
-                data = transform_cwa_response(cwa_json)
-        except Exception:
-            pass
+def fetch_weather_data():
+    """主要資料取得函式，連線至 CWA API。"""
+    url = f"{URL_COUNTIES}?Authorization={CWA_API_KEY}&format=JSON"
+    data = None
+    is_live = False
+
+    try:
+        cwa_json = http_get_json(url, timeout=20)
+        if cwa_json:
+            data = transform_cwa_response(cwa_json)
+            if data and len(data) > 0:
+                is_live = True
+    except Exception:
+        pass
 
     if not data:
         data = generate_fallback_data()
 
-    return data
+    return data, is_live
 
 
 # ── Vercel Handler ──────────────────────────────────
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        # CORS headers
+        # 快取控制設為 60 秒，確保使用者即時更新
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.send_header("Cache-Control", "public, max-age=1800, s-maxage=3600")
+        self.send_header("Cache-Control", "public, max-age=60, s-maxage=120")
         self.end_headers()
 
-        data = fetch_weather_data()
+        parsed = urlparse(self.path)
+        query_params = parse_qs(parsed.query)
+
+        data, is_live = fetch_weather_data()
         alerts = fetch_weather_alerts()
+
+        # 若目前氣象署無特報且使用者請求展示，提供示範警報資料供驗證
+        if query_params.get("demo_alert", ["0"])[0] == "1" and not alerts:
+            alerts = [
+                {
+                    "locationName": "苗栗縣、臺中市、彰化縣、雲林縣、嘉義縣、臺南市、澎湖縣",
+                    "phenomena": "陸上強風特報",
+                    "significance": "黃色燈號",
+                    "contentText": "東北風明顯偏強，苗栗至臺南沿海空曠地區、恆春半島及澎湖、金門、綠島、蘭嶼易有9至10級強陣風，請特別注意安全。",
+                    "startTime": datetime.datetime.now().strftime("%Y-%m-%d %H:00:00"),
+                    "endTime": (datetime.datetime.now() + datetime.timedelta(days=1)).strftime("%Y-%m-%d 23:59:59")
+                }
+            ]
+
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         response = {
             "success": True,
+            "source": "cwa_live" if is_live else "fallback_simulation",
             "updatedAt": now,
             "totalLocations": len(data),
+            "alertStatus": "ACTIVE" if alerts else "CLEAR",
             "alerts": alerts,
             "locations": data
         }

@@ -11,6 +11,7 @@ let currentLoc   = "臺北市";
 let map          = null;
 let markers      = [];
 let tempChart    = null;
+let isDemoAlert  = false;
 
 // ── Coordinates ───────────────────────────────────
 const COUNTY_COORDS = {
@@ -63,12 +64,17 @@ document.addEventListener("DOMContentLoaded", () => {
   setInterval(updateTime, 60000);
 });
 
-function updateTime() {
+function updateTime(customTime) {
   const el = document.getElementById("banner-time");
-  if (el) el.textContent = "資料時間: " + new Date().toLocaleString("zh-TW", {
-    year:"numeric", month:"2-digit", day:"2-digit",
-    hour:"2-digit", minute:"2-digit"
-  });
+  if (!el) return;
+  if (customTime) {
+    el.textContent = "資料時間: " + customTime;
+  } else {
+    el.textContent = "資料時間: " + new Date().toLocaleString("zh-TW", {
+      year:"numeric", month:"2-digit", day:"2-digit",
+      hour:"2-digit", minute:"2-digit"
+    });
+  }
 }
 
 // ── Map Initialisation ─────────────────────────────
@@ -184,20 +190,23 @@ function rebuildLocationSelect() {
 }
 
 // ── Load Data ──────────────────────────────────────
-async function loadData() {
+async function loadData(isSync = false) {
   try {
-    const res = await fetch("/api/weather");
+    const query = isDemoAlert ? "?demo_alert=1" : (isSync ? `?refresh=1&t=${Date.now()}` : "");
+    const res = await fetch(`/api/weather${query}`);
     const json = await res.json();
     if (json.success && json.locations) {
       allLocations = json.locations;
-      renderAlerts(json.alerts);
+      renderAlerts(json.alerts || [], json.alertStatus);
+      if (json.updatedAt) updateTime(json.updatedAt);
     } else {
       allLocations = json.locations || json || [];
-      renderAlerts(json.alerts);
+      renderAlerts(json.alerts || [], json.alertStatus);
     }
   } catch (err) {
     console.error("Failed to fetch weather data:", err);
     allLocations = generateFallback();
+    renderAlerts([], "CLEAR");
   }
 
   hideLoading();
@@ -211,15 +220,18 @@ async function syncData() {
   btn.innerHTML = `<span style="display:inline-block;animation:spin 1s linear infinite">↻</span> 同步中...`;
 
   try {
-    const res = await fetch("/api/weather?refresh=1");
-    const json = await res.json();
-    if (json.locations) allLocations = json.locations;
-    rebuildLocationSelect();
-    renderMapMarkers();
-  } catch(e) { /* silent */ }
+    await loadData(true);
+  } catch(e) {
+    console.error("Sync error:", e);
+  }
 
   btn.classList.remove("loading");
   btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M13.65 2.35A8 8 0 1 0 16 8h-2a6 6 0 1 1-1.76-4.24L10 6h6V0l-2.35 2.35z" fill="currentColor"/></svg> 同步氣象署最新資料`;
+}
+
+function toggleDemoAlerts() {
+  isDemoAlert = !isDemoAlert;
+  loadData();
 }
 
 function hideLoading() {
@@ -250,6 +262,8 @@ function renderMapMarkers() {
     const avgT = +((minT + maxT) / 2).toFixed(1);
     const color = getTempColor(avgT);
     const dateStr = today.date;
+    const ws = today.ws || "-";
+    const wd = today.wd || "-";
 
     const iconHtml = `
       <div style="width:150px;height:48px;display:flex;flex-direction:column;
@@ -269,9 +283,9 @@ function renderMapMarkers() {
       </div>`;
 
     const popupHtml = `
-      <div style="font-family:'Inter',Roboto,Arial,sans-serif;min-width:220px;max-width:280px;">
+      <div style="font-family:'Inter',Roboto,Arial,sans-serif;min-width:240px;max-width:300px;">
         <div style="padding:12px 16px 8px;border-bottom:1px solid #E8EAED;">
-          <div style="font-size:16px;font-weight:600;color:#202124;margin-bottom:2px;">${loc.name}</div>
+          <div style="font-size:16px;font-weight:700;color:#202124;margin-bottom:2px;">${loc.name}</div>
           <div style="font-size:12px;color:#70757A;">氣象預報 · ${dateStr}</div>
         </div>
         <div style="padding:12px 16px;">
@@ -281,13 +295,17 @@ function renderMapMarkers() {
             <span style="display:inline-block;width:10px;height:10px;border-radius:50%;
               background:${color};margin-left:8px;"></span>
           </div>
-          <div style="display:flex;gap:16px;font-size:13px;color:#3C4043;">
+          <div style="display:flex;gap:16px;font-size:13px;color:#3C4043;margin-bottom:10px;">
             <div><span style="color:#70757A;">低溫</span><br>
               <span style="font-weight:600;color:#1A73E8;">${minT}°C</span></div>
             <div><span style="color:#70757A;">高溫</span><br>
               <span style="font-weight:600;color:#EA4335;">${maxT}°C</span></div>
             <div><span style="color:#70757A;">溫差</span><br>
               <span style="font-weight:600;color:#3C4043;">${(maxT-minT).toFixed(1)}°C</span></div>
+          </div>
+          <div style="display:flex;gap:12px;background:#F8FAFC;padding:8px 10px;border-radius:6px;border:1px solid #E2E8F0;font-size:12px;color:#334155;">
+            <div>💨 風速: <strong>${ws}</strong></div>
+            <div>🧭 風向: <strong>${wd}</strong></div>
           </div>
         </div>
         <div style="padding:8px 16px;border-top:1px solid #E8EAED;text-align:right;">
@@ -305,7 +323,7 @@ function renderMapMarkers() {
 
     const marker = L.marker(coords, { icon })
       .addTo(map)
-      .bindPopup(popupHtml, { maxWidth: 300 });
+      .bindPopup(popupHtml, { maxWidth: 320 });
 
     markers.push(marker);
   });
@@ -349,6 +367,8 @@ function updateSelectedCard(name) {
   if (tempEl) { tempEl.textContent = avgT + " °C"; tempEl.style.color = color; }
   setText("selected-min", today.minT + "°C");
   setText("selected-max", today.maxT + "°C");
+  setText("selected-ws", today.ws || "-");
+  setText("selected-wd", today.wd || "-");
 }
 
 // ── Chart Tab ──────────────────────────────────────
@@ -375,6 +395,12 @@ function renderChartTab(name) {
   setText("kpi-range", range  + " °C");
   setText("kpi-max-delta", `+${(maxAll - avgAll).toFixed(1)}°C`);
   setText("kpi-min-delta", `-${(avgAll - minAll).toFixed(1)}°C`);
+
+  // Wind KPI
+  const todayWs = forecasts[0].ws || "-";
+  const todayWd = forecasts[0].wd || "-";
+  setText("kpi-wind", todayWs);
+  setText("kpi-wind-dir", "風向: " + todayWd);
 
   // Chart
   const labels = forecasts.map(f => f.date.slice(5)); // MM-DD
@@ -448,12 +474,12 @@ function renderChartTab(name) {
     tbody.innerHTML = forecasts.map(f => {
       const avg = ((f.minT + f.maxT) / 2).toFixed(1);
       return `<tr>
-        <td>${f.date}</td>
-        <td class="td-min">${f.minT}</td>
-        <td class="td-max">${f.maxT}</td>
-        <td>${avg}</td>
-        <td>${f.ws || "-"}</td>
-        <td>${f.wd || "-"}</td>
+        <td><strong>${f.date}</strong></td>
+        <td class="td-min">${f.minT}°C</td>
+        <td class="td-max">${f.maxT}°C</td>
+        <td>${avg}°C</td>
+        <td><span class="wind-badge">💨 ${f.ws || "-"}</span></td>
+        <td><span class="dir-badge">🧭 ${f.wd || "-"}</span></td>
       </tr>`;
     }).join("");
   }
@@ -479,7 +505,13 @@ function generateFallback() {
       const d = new Date(today); d.setDate(d.getDate() + i);
       const dateStr = d.toISOString().slice(0,10);
       const v = (i % 4) - 1.5;
-      forecasts.push({ date: dateStr, minT: +(23 + v).toFixed(1), maxT: +(31 + v).toFixed(1) });
+      forecasts.push({
+        date: dateStr,
+        minT: +(23 + v).toFixed(1),
+        maxT: +(31 + v).toFixed(1),
+        ws: "3 m/s (2級)",
+        wd: "偏東風"
+      });
     }
     return { name, type, forecasts };
   });
@@ -491,23 +523,72 @@ function setText(id, text) {
   if (el) el.textContent = text;
 }
 
-function renderAlerts(alerts) {
+// ── Weather Alerts Rendering ───────────────────────
+function renderAlerts(alerts, alertStatus) {
   const container = document.getElementById("alerts-container");
+  const statusPill = document.getElementById("alert-status-pill");
+  const statusDot = document.getElementById("alert-status-dot");
+  const statusText = document.getElementById("alert-status-text");
+
   if (!container) return;
-  if (!alerts || !alerts.length) {
-    container.innerHTML = "";
-    return;
-  }
-  
-  container.innerHTML = alerts.map(alert => {
-    const loc = alert.locationName || "未知區域";
-    const phenomena = alert.phenomena || "特報";
-    const text = alert.contentText || "";
-    return `
-      <div style="background-color: #FEE2E2; border-left: 4px solid #EF4444; color: #991B1B; padding: 12px 16px; margin-bottom: 12px; border-radius: 4px; font-size: 14px; font-weight: 500; display: flex; align-items: flex-start; gap: 8px;">
-        <span style="font-size: 16px;">⚠️</span>
-        <div><strong>${loc} ${phenomena}：</strong> ${text}</div>
+
+  if (alerts && alerts.length > 0) {
+    // 警報狀態觸發
+    if (statusDot) statusDot.className = "alert-status-dot alert-active";
+    if (statusText) statusText.textContent = `${alerts.length} 項特報生效`;
+    if (statusPill) statusPill.className = "alert-status-pill active";
+
+    container.innerHTML = `
+      <div class="alert-banner alert-banner-active">
+        <div class="alert-banner-header">
+          <div class="alert-banner-title">
+            <span class="alert-banner-icon">⚠️</span>
+            <span>中央氣象署即時天氣特報 (共 ${alerts.length} 項警戒)</span>
+          </div>
+          <button class="alert-toggle-btn" onclick="toggleDemoAlerts()">
+            ${isDemoAlert ? "退出示範模式" : "切換模式"}
+          </button>
+        </div>
+        <div class="alert-list">
+          ${alerts.map(alert => {
+            const loc = alert.locationName || "全台各縣市";
+            const phenomena = alert.phenomena || "天氣特報";
+            const significance = alert.significance || "警戒燈號";
+            const text = alert.contentText || "";
+            const timeRange = (alert.startTime && alert.endTime)
+              ? `有效時間: ${alert.startTime} 至 ${alert.endTime}`
+              : "";
+            return `
+              <div class="alert-card">
+                <div class="alert-card-top">
+                  <span class="alert-phenomena-pill">${phenomena}</span>
+                  <span class="alert-significance-pill">${significance}</span>
+                  <strong class="alert-location-title">📍 ${loc}</strong>
+                </div>
+                <div class="alert-content-text">${text}</div>
+                ${timeRange ? `<div class="alert-time-text">⏱️ ${timeRange}</div>` : ""}
+              </div>
+            `;
+          }).join("")}
+        </div>
       </div>
     `;
-  }).join("");
+  } else {
+    // 全台無警報 - 顯示正常綠色標記與預覽示範按鈕
+    if (statusDot) statusDot.className = "alert-status-dot alert-clear";
+    if (statusText) statusText.textContent = "特報：全台無警戒";
+    if (statusPill) statusPill.className = "alert-status-pill";
+
+    container.innerHTML = `
+      <div class="alert-banner alert-banner-normal">
+        <div class="alert-normal-content">
+          <span class="alert-normal-icon">🟢</span>
+          <span><strong>氣象特報監測：</strong>中央氣象署目前未對全台各縣市發布特殊天氣警報，天候狀況正常。</span>
+        </div>
+        <button class="alert-demo-action-btn" onclick="toggleDemoAlerts()" title="模擬氣象特報發布時的頁面外觀">
+          ⚡ 預覽示範警報 UI
+        </button>
+      </div>
+    `;
+  }
 }

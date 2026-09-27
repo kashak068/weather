@@ -40,16 +40,22 @@
             <p class="banner-subtitle">交通部中央氣象署 (CWA) 臺灣全台 22 縣市與分區 · 未來 14 天氣象預報</p>
         </div>
         <div class="banner-right">
-            <span class="status-pill" id="status-pill">
-                <span class="green-dot"></span>
-                CWA API ONLINE
-            </span>
+            <div class="status-group">
+                <span class="status-pill" id="status-pill">
+                    <span class="green-dot"></span>
+                    CWA API ONLINE
+                </span>
+                <span class="alert-status-pill" id="alert-status-pill">
+                    <span class="alert-status-dot" id="alert-status-dot"></span>
+                    <span id="alert-status-text">特報監控中</span>
+                </span>
+            </div>
             <p class="banner-time" id="banner-time">資料時間: --</p>
         </div>
     </header>
 
     <!-- ═══════════ Alerts Container ═══════════ -->
-    <div id="alerts-container" class="alerts-container" style="padding: 0 20px;"></div>
+    <div id="alerts-container" class="alerts-container"></div>
 
     <!-- ═══════════ Main Layout ═══════════ -->
     <main class="main-container">
@@ -96,6 +102,7 @@
                 <p><strong>資料來源</strong>: 交通部中央氣象署 (CWA)</p>
                 <p><strong>涵蓋範圍</strong>: 全台 22 縣市 + 大分區</p>
                 <p><strong>預報長度</strong>: 未來 14 天 (兩週) 滾動預報</p>
+                <p><strong>觀測項目</strong>: 氣溫 · 特報 · 風速 · 風向</p>
             </div>
         </aside>
 
@@ -131,7 +138,7 @@
                             <hr class="card-divider">
                             <div class="card-hint">
                                 💡 <b>操作說明</b>：<br>
-                                地圖標記顯示各地氣溫數值，點擊任一標記可查看最高溫與最低溫資訊。
+                                地圖標記顯示各地氣溫數值，點擊任一標記可查看最高溫、最低溫與<b>風速風向資訊</b>。
                             </div>
                         </div>
                         <!-- Current Selection Card -->
@@ -142,6 +149,17 @@
                             <div class="selected-range">
                                 <span>最低溫: <b class="temp-low" id="selected-min">--</b></span>
                                 <span>最高溫: <b class="temp-high" id="selected-max">--</b></span>
+                            </div>
+                            <hr class="card-mini-divider">
+                            <div class="selected-wind-info">
+                                <div class="wind-info-item">
+                                    <span class="wind-icon">💨</span>
+                                    <span class="wind-text">風速: <strong id="selected-ws">--</strong></span>
+                                </div>
+                                <div class="wind-info-item">
+                                    <span class="wind-icon">🧭</span>
+                                    <span class="wind-text">風向: <strong id="selected-wd">--</strong></span>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -172,6 +190,11 @@
                         <div class="kpi-label">週期最大溫差</div>
                         <div class="kpi-value" id="kpi-range">--</div>
                     </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">今日風況指標</div>
+                        <div class="kpi-value kpi-wind" id="kpi-wind">--</div>
+                        <div class="kpi-delta" id="kpi-wind-dir">--</div>
+                    </div>
                 </div>
 
                 <div class="chart-divider"></div>
@@ -193,8 +216,8 @@
                                         <th>最低溫 (°C)</th>
                                         <th>最高溫 (°C)</th>
                                         <th>平均溫 (°C)</th>
-                                        <th>風速</th>
-                                        <th>風向</th>
+                                        <th>💨 風速</th>
+                                        <th>🧭 風向</th>
                                     </tr>
                                 </thead>
                                 <tbody id="forecast-tbody">
