@@ -1,5 +1,10 @@
 # 🌤️ Taiwan Weather Forecast — 臺灣氣候觀測與預報儀表板
 
+<img width="1905" height="948" alt="image" src="https://github.com/user-attachments/assets/940468d6-4c7c-4f8a-9428-2d52fc6cc950" />
+<img width="1916" height="775" alt="image" src="https://github.com/user-attachments/assets/0bcaa6ac-6cd2-4f85-b8bd-222c8e75bc34" />
+![Uploading image.png…]()
+
+
 > **線上展示網址**：https://weather-nine-rho-24.vercel.app/  
 > **以交通部中央氣象署 (CWA) API 為唯一資料來源 · 多圖層獨立控制互動氣象地圖**  
 > 資料獲取 · 結構清洗 · 資料庫儲存 · 即時觀測 · 14 天滾動預報 · 視覺化展示  
