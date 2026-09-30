@@ -36,7 +36,8 @@ def init_database(db_path: str = DB_FILE, drop_old: bool = False):
             minT REAL NOT NULL,
             maxT REAL NOT NULL,
             ws TEXT DEFAULT '',
-            wd TEXT DEFAULT ''
+            wd TEXT DEFAULT '',
+            uvi TEXT DEFAULT ''
         );
         """
         cursor.execute(create_table_sql)
@@ -46,6 +47,8 @@ def init_database(db_path: str = DB_FILE, drop_old: bool = False):
         cols = [col[1] for col in cursor.fetchall()]
         if "locationType" not in cols:
             cursor.execute(f"ALTER TABLE {TABLE_NAME} ADD COLUMN locationType TEXT DEFAULT 'county';")
+        if "uvi" not in cols:
+            cursor.execute(f"ALTER TABLE {TABLE_NAME} ADD COLUMN uvi TEXT DEFAULT '';")
 
         cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_region ON {TABLE_NAME}(regionName);")
         cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_type ON {TABLE_NAME}(locationType);")
@@ -65,8 +68,8 @@ def insert_forecasts(records: List[Dict[str, Any]], db_path: str = DB_FILE, over
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
         insert_sql = f"""
-        INSERT INTO {TABLE_NAME} (regionName, locationType, dataDate, minT, maxT, ws, wd)
-        VALUES (:regionName, :locationType, :dataDate, :minT, :maxT, :ws, :wd);
+        INSERT INTO {TABLE_NAME} (regionName, locationType, dataDate, minT, maxT, ws, wd, uvi)
+        VALUES (:regionName, :locationType, :dataDate, :minT, :maxT, :ws, :wd, :uvi);
         """
         cursor.executemany(insert_sql, records)
         conn.commit()
@@ -91,9 +94,9 @@ def query_distinct_locations(db_path: str = DB_FILE, location_type: str = None) 
 
 
 def query_by_location(location_name: str, db_path: str = DB_FILE) -> List[Dict[str, Any]]:
-    """查詢指定縣市或分區的氣溫預報資料。"""
+    """查詢指定縣市或分區的氣象預報資料。"""
     sql = f"""
-    SELECT id, regionName, locationType, dataDate, minT, maxT, ws, wd
+    SELECT id, regionName, locationType, dataDate, minT, maxT, ws, wd, uvi
     FROM {TABLE_NAME}
     WHERE regionName = ?
     ORDER BY dataDate ASC;
@@ -111,7 +114,7 @@ def query_all_latest_day(db_path: str = DB_FILE, location_type: str = None) -> L
     params = (location_type,) if location_type else ()
 
     sql = f"""
-    SELECT t.regionName, t.locationType, t.dataDate, t.minT, t.maxT, t.ws, t.wd
+    SELECT t.regionName, t.locationType, t.dataDate, t.minT, t.maxT, t.ws, t.wd, t.uvi
     FROM {TABLE_NAME} t
     INNER JOIN (
         SELECT regionName, MIN(dataDate) as minDate

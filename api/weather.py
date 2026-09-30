@@ -1,7 +1,7 @@
 """
 api/weather.py - Vercel Serverless Function
-提供 CWA 天氣預報 API 端點，回傳全台 22 縣市 + 六大分區 14 天氣溫、風速風向及特報資料。
-使用 Python 原生 urllib.request，無任何外部相依性，確保在 Vercel 雲端環境穩定執行。
+提供 CWA 天氣預報與即時觀測 API 端點，回傳全台 22 縣市 + 六大分區 14 天氣溫預報、即時雨量、風速風向及特報資料。
+使用 Python 原生 urllib.request 與 concurrent.futures，無任何外部相依性，確保在 Vercel 雲端環境穩定快速執行。
 """
 
 import datetime
@@ -9,6 +9,7 @@ import json
 import os
 import urllib.request
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
@@ -18,6 +19,8 @@ DEFAULT_CWA_KEY = "CWA-77CABAA6-1A23-482A-8B46-7FD6A9EBC814"
 CWA_API_KEY = os.environ.get("CWA_API_KEY", "").strip() or DEFAULT_CWA_KEY
 
 URL_COUNTIES = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-D0047-091"
+URL_OBSERVATIONS = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/O-A0003-001"
+URL_UV_OBSERVATIONS = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/O-A0005-001"
 URL_ALERTS = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/W-C0033-002"
 TARGET_DAYS = 14
 
@@ -41,7 +44,7 @@ ALL_COUNTIES = [
 ]
 
 
-def http_get_json(url: str, timeout: int = 15):
+def http_get_json(url: str, timeout: int = 12):
     """使用 Python 原生 urllib 取得 JSON 資料。"""
     req = urllib.request.Request(
         url,
@@ -53,9 +56,66 @@ def http_get_json(url: str, timeout: int = 15):
     return None
 
 
+def deg_to_compass(deg):
+    """將風向角度 (0-360) 轉換為 16 方位文字描述。"""
+    if deg is None:
+        return None
+    try:
+        val = float(deg)
+        if val < 0 or val > 360:
+            return None
+        dirs = [
+            "北風", "北北東風", "東北風", "東北東風",
+            "東風", "東南東風", "東南風", "南南東風",
+            "南風", "南南西風", "西南風", "西南西風",
+            "西風", "西北西風", "西北風", "北北西風"
+        ]
+        ix = int((val + 11.25) / 22.5) % 16
+        return dirs[ix]
+    except Exception:
+        return None
+
+
+def parse_float_safe(val, invalid_values=None):
+    """安全解析數值，過濾 CWA 常見的無效記號 (-99, -999, 空字串等)。"""
+    if val is None:
+        return None
+    if invalid_values is None:
+        invalid_values = ["-99", "-99.0", "-998", "-999", "", "-", "None", "null"]
+    s = str(val).strip()
+    if s in invalid_values:
+        return None
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return None
+
+
+def get_uv_level_desc(uvi):
+    """根據中央氣象署與世界衛生組織 (WHO) 紫外線指數標準提供分級描述。"""
+    if uvi is None:
+        return "資料暫缺"
+    try:
+        val = float(uvi)
+        if val < 0:
+            return "資料暫缺"
+        elif val <= 2.4:
+            return "低量級"
+        elif val <= 5.4:
+            return "中量級"
+        elif val <= 7.4:
+            return "高量級"
+        elif val <= 10.4:
+            return "過量級"
+        else:
+            return "危險級"
+    except Exception:
+        return "良好"
+
+
 # ── 資料處理函式 ──────────────────────────────────────
-def extend_to_14_days(min_date_temps, max_date_temps, ws_date_vals, wd_date_vals):
-    """將收集到的預報資料延展至 14 天。"""
+def extend_to_14_days(min_date_temps, max_date_temps, ws_date_vals, wd_date_vals, uv_date_vals=None):
+    """將收集到的預報資料延展至 14 天，包含氣溫、風向風速與紫外線指數。"""
     existing_dates = sorted(list(set(min_date_temps.keys()) | set(max_date_temps.keys())))
 
     if existing_dates:
@@ -67,6 +127,14 @@ def extend_to_14_days(min_date_temps, max_date_temps, ws_date_vals, wd_date_vals
     all_maxs = [max(max_date_temps[d]) for d in existing_dates if d in max_date_temps and max_date_temps[d]]
     base_min = sum(all_mins) / len(all_mins) if all_mins else 22.0
     base_max = sum(all_maxs) / len(all_maxs) if all_maxs else 30.0
+
+    uv_vals = uv_date_vals or {}
+    existing_uvs = [
+        float(uv_vals[d]["uvi"])
+        for d in existing_dates
+        if d in uv_vals and uv_vals[d].get("uvi") is not None and float(uv_vals[d]["uvi"]) >= 0
+    ]
+    base_uvi = round(sum(existing_uvs) / len(existing_uvs), 1) if existing_uvs else 6.0
 
     results = []
     for day_idx in range(TARGET_DAYS):
@@ -88,23 +156,34 @@ def extend_to_14_days(min_date_temps, max_date_temps, ws_date_vals, wd_date_vals
         ws_val = ws_date_vals.get(d_str, ["-"])[0] if ws_date_vals else "-"
         wd_val = wd_date_vals.get(d_str, ["-"])[0] if wd_date_vals else "-"
 
+        if d_str in uv_vals and uv_vals[d_str].get("uvi") is not None:
+            day_uvi = round(float(uv_vals[d_str]["uvi"]), 1)
+            day_uv_level = uv_vals[d_str].get("level") or get_uv_level_desc(day_uvi)
+        else:
+            cycle_var = ((day_idx % 3) - 1.0) * 0.8
+            day_uvi = max(1.0, min(12.0, round(base_uvi + cycle_var, 1)))
+            day_uv_level = get_uv_level_desc(day_uvi)
+
         results.append({
             "date": d_str,
             "minT": day_min,
             "maxT": day_max,
             "ws": ws_val,
-            "wd": wd_val
+            "wd": wd_val,
+            "uvi": day_uvi,
+            "uvLevel": day_uv_level
         })
 
     return results
 
 
 def parse_location_elements(c_loc):
-    """從單一縣市萃取 MinT / MaxT / WS / WD 並延展為 14 天。"""
+    """從單一縣市萃取 MinT / MaxT / WS / WD / 紫外線指數 並延展為 14 天。"""
     min_date_temps = {}
     max_date_temps = {}
     ws_date_vals = {}
     wd_date_vals = {}
+    uv_date_vals = {}
 
     for elem in c_loc.get("WeatherElement", []):
         elem_name = elem.get("ElementName", "")
@@ -112,7 +191,8 @@ def parse_location_elements(c_loc):
         is_max = elem_name in ["最高溫度", "MaxT", "MaxTemperature"]
         is_ws = elem_name in ["風速", "WS"]
         is_wd = elem_name in ["風向", "WD"]
-        if not (is_min or is_max or is_ws or is_wd):
+        is_uv = elem_name in ["紫外線指數", "UVI", "UVIndex"]
+        if not (is_min or is_max or is_ws or is_wd or is_uv):
             continue
 
         for t in elem.get("Time", []):
@@ -138,6 +218,17 @@ def parse_location_elements(c_loc):
                     wd_date_vals.setdefault(date_str, []).append(str(direction))
                 continue
 
+            if is_uv:
+                raw_uvi = val_dict.get("UVIndex") or val_dict.get("Value") or val_dict.get("value")
+                raw_lvl = val_dict.get("UVExposureLevel") or ""
+                parsed_uvi = parse_float_safe(raw_uvi)
+                if parsed_uvi is not None and parsed_uvi >= 0:
+                    uv_date_vals[date_str] = {
+                        "uvi": parsed_uvi,
+                        "level": raw_lvl or get_uv_level_desc(parsed_uvi)
+                    }
+                continue
+
             raw_val = None
             for k in ["MinTemperature", "MaxTemperature", "Value", "value", "Temperature"]:
                 if k in val_dict and val_dict[k] not in [None, "", "-"]:
@@ -154,11 +245,70 @@ def parse_location_elements(c_loc):
                 except (ValueError, TypeError):
                     continue
 
-    return extend_to_14_days(min_date_temps, max_date_temps, ws_date_vals, wd_date_vals)
+    return extend_to_14_days(min_date_temps, max_date_temps, ws_date_vals, wd_date_vals, uv_date_vals)
 
 
-def transform_cwa_response(cwa_data):
-    """將 CWA API 回傳轉為結構化 JSON。"""
+def compute_region_observation(county_obs, county_list, region_name):
+    """計算六大區域之綜合/平均即時觀測值（雨量、氣溫、濕度、風向風速、紫外線）。"""
+    if not county_obs:
+        return None
+
+    valid_rain = []
+    valid_temp = []
+    valid_rh = []
+    valid_ws = []
+    valid_wd = []
+    valid_uv = []
+    latest_time = None
+
+    for c in county_list:
+        obs = county_obs.get(c)
+        if not obs:
+            continue
+        if obs.get("rainfall") is not None:
+            valid_rain.append(obs["rainfall"])
+        if obs.get("temp") is not None:
+            valid_temp.append(obs["temp"])
+        if obs.get("humidity") is not None:
+            valid_rh.append(obs["humidity"])
+        if obs.get("windSpeed") is not None:
+            valid_ws.append(obs["windSpeed"])
+        if obs.get("windDirection") is not None:
+            valid_wd.append(obs["windDirection"])
+        if obs.get("uvIndex") is not None and obs["uvIndex"] >= 0:
+            valid_uv.append(obs["uvIndex"])
+        elif obs.get("peakUvi") is not None and obs["peakUvi"] >= 0:
+            valid_uv.append(obs["peakUvi"])
+        if obs.get("obsTime") and (not latest_time or obs["obsTime"] > latest_time):
+            latest_time = obs["obsTime"]
+
+    if not (valid_rain or valid_temp or valid_rh or valid_ws or valid_uv):
+        return None
+
+    avg_rain = round(sum(valid_rain) / len(valid_rain), 1) if valid_rain else None
+    avg_temp = round(sum(valid_temp) / len(valid_temp), 1) if valid_temp else None
+    avg_rh = int(round(sum(valid_rh) / len(valid_rh))) if valid_rh else None
+    avg_ws = round(sum(valid_ws) / len(valid_ws), 1) if valid_ws else None
+    avg_wd = round(sum(valid_wd) / len(valid_wd), 1) if valid_wd else None
+    avg_uv = round(sum(valid_uv) / len(valid_uv), 1) if valid_uv else None
+    uv_lvl = get_uv_level_desc(avg_uv) if avg_uv is not None else None
+
+    return {
+        "rainfall": avg_rain,
+        "temp": avg_temp,
+        "humidity": avg_rh,
+        "windSpeed": avg_ws,
+        "windDirection": avg_wd,
+        "windCompass": deg_to_compass(avg_wd),
+        "uvIndex": avg_uv,
+        "uvLevel": uv_lvl,
+        "obsTime": latest_time,
+        "stationName": f"{region_name}綜合觀測"
+    }
+
+
+def transform_cwa_response(cwa_data, county_obs=None):
+    """將 CWA API 預報資料結合各縣市觀測資料轉為結構化 JSON。"""
     try:
         raw_locs = cwa_data["records"]["Locations"][0]["Location"]
     except (KeyError, IndexError, TypeError):
@@ -171,10 +321,12 @@ def transform_cwa_response(cwa_data):
     for c_name in ALL_COUNTIES:
         if c_name in county_dict:
             forecasts = parse_location_elements(county_dict[c_name])
+            obs = county_obs.get(c_name) if county_obs else None
             locations_list.append({
                 "name": c_name,
                 "type": "county",
-                "forecasts": forecasts
+                "forecasts": forecasts,
+                "observation": obs
             })
 
     # 六大分區
@@ -183,6 +335,7 @@ def transform_cwa_response(cwa_data):
         max_date_temps = {}
         ws_date_vals = {}
         wd_date_vals = {}
+        uv_date_vals = {}
 
         for c_name in county_list:
             if c_name not in county_dict:
@@ -194,7 +347,8 @@ def transform_cwa_response(cwa_data):
                 is_max = elem_name in ["最高溫度", "MaxT", "MaxTemperature"]
                 is_ws = elem_name in ["風速", "WS"]
                 is_wd = elem_name in ["風向", "WD"]
-                if not (is_min or is_max or is_ws or is_wd):
+                is_uv = elem_name in ["紫外線指數", "UVI", "UVIndex"]
+                if not (is_min or is_max or is_ws or is_wd or is_uv):
                     continue
                 for t in elem.get("Time", []):
                     st = t.get("StartTime", "")
@@ -218,6 +372,18 @@ def transform_cwa_response(cwa_data):
                             wd_date_vals.setdefault(date_str, []).append(str(direction))
                         continue
 
+                    if is_uv:
+                        raw_uvi = val_dict.get("UVIndex") or val_dict.get("Value") or val_dict.get("value")
+                        raw_lvl = val_dict.get("UVExposureLevel") or ""
+                        parsed_uvi = parse_float_safe(raw_uvi)
+                        if parsed_uvi is not None and parsed_uvi >= 0:
+                            if date_str not in uv_date_vals:
+                                uv_date_vals[date_str] = {
+                                    "uvi": parsed_uvi,
+                                    "level": raw_lvl or get_uv_level_desc(parsed_uvi)
+                                }
+                        continue
+
                     raw_val = None
                     for k in ["MinTemperature", "MaxTemperature", "Value", "value", "Temperature"]:
                         if k in val_dict and val_dict[k] not in [None, "", "-"]:
@@ -233,18 +399,20 @@ def transform_cwa_response(cwa_data):
                         except (ValueError, TypeError):
                             continue
 
-        forecasts = extend_to_14_days(min_date_temps, max_date_temps, ws_date_vals, wd_date_vals)
+        forecasts = extend_to_14_days(min_date_temps, max_date_temps, ws_date_vals, wd_date_vals, uv_date_vals)
+        reg_obs = compute_region_observation(county_obs, county_list, reg_name) if county_obs else None
         locations_list.append({
             "name": reg_name,
             "type": "region",
-            "forecasts": forecasts
+            "forecasts": forecasts,
+            "observation": reg_obs
         })
 
     return locations_list
 
 
 def generate_fallback_data():
-    """生成 14 天模擬天氣預報。"""
+    """生成 14 天模擬預報。注意：依規範不可編造即時雨量/風速觀測，故 observation 設為 None。"""
     base_date = datetime.date.today()
     locations_list = []
 
@@ -257,21 +425,150 @@ def generate_fallback_data():
             variation = (day_offset % 4) - 1.5
             cur_min = round(23.0 + variation, 1)
             cur_max = round(31.0 + variation, 1)
+            cur_uvi = round(6.5 + ((day_offset % 3) - 1) * 1.2, 1)
             forecasts.append({
                 "date": date_str,
                 "minT": cur_min,
                 "maxT": cur_max,
                 "ws": "3 m/s (2級)",
-                "wd": "偏東風"
+                "wd": "偏東風",
+                "uvi": cur_uvi,
+                "uvLevel": get_uv_level_desc(cur_uvi)
             })
 
         locations_list.append({
             "name": loc_name,
             "type": "county" if loc_name in ALL_COUNTIES else "region",
-            "forecasts": forecasts
+            "forecasts": forecasts,
+            "observation": None  # 無真實觀測資料時傳 None，由前端呈現「資料暫缺」
         })
 
     return locations_list
+
+
+def fetch_uv_observations():
+    """從 CWA 取得紫外線指數觀測資料 (O-A0005-001)。"""
+    url = f"{URL_UV_OBSERVATIONS}?Authorization={CWA_API_KEY}&format=JSON"
+    try:
+        data = http_get_json(url, timeout=10)
+        if not data:
+            return {}
+        locs = data.get("records", {}).get("weatherElement", {}).get("location", [])
+        stn_uv = {}
+        for l in locs:
+            sid = l.get("StationID")
+            uvi_raw = parse_float_safe(l.get("UVIndex"))
+            if sid and uvi_raw is not None and uvi_raw >= 0:
+                stn_uv[sid] = round(uvi_raw, 1)
+        return stn_uv
+    except Exception:
+        return {}
+
+
+def fetch_realtime_observations(uv_station_data=None):
+    """從 CWA 取得全台氣象站即時觀測資料 (O-A0003-001) 並對應至各縣市。"""
+    url = f"{URL_OBSERVATIONS}?Authorization={CWA_API_KEY}&format=JSON"
+    county_obs = {}
+    stn_uv_map = uv_station_data or {}
+    try:
+        cwa_json = http_get_json(url, timeout=12)
+        if not cwa_json:
+            return {}
+        stations = cwa_json.get("records", {}).get("Station", [])
+        by_county = {}
+        for s in stations:
+            c = s.get("GeoInfo", {}).get("CountyName")
+            if c:
+                by_county.setdefault(c, []).append(s)
+
+        # 優先測站名稱偏好（選取最能代表該縣市之氣象局屬站）
+        preferred_stns = {
+            "新竹市": ["新竹", "東區"],
+            "新竹縣": ["新竹", "竹北"],
+            "新北市": ["板橋", "新北", "淡水"],
+            "桃園市": ["桃園", "新屋", "中壢"],
+            "苗栗縣": ["苗栗", "苗栗農改", "後龍"],
+            "彰化縣": ["彰化", "彰師大", "員林"],
+            "南投縣": ["南投", "日月潭"],
+            "雲林縣": ["斗六", "雲林", "麥寮"],
+            "嘉義縣": ["嘉義", "太保", "民雄", "溪口"],
+            "屏東縣": ["屏東", "恆春"],
+            "連江縣": ["馬祖", "南竿"],
+            "金門縣": ["金門"]
+        }
+
+        for c_name in ALL_COUNTIES:
+            c_stations = by_county.get(c_name, [])
+            if not c_stations:
+                county_obs[c_name] = None
+                continue
+
+            chosen = None
+            pref_keywords = preferred_stns.get(c_name, [c_name[:2]])
+            for kw in pref_keywords:
+                for s in c_stations:
+                    if kw in s.get("StationName", ""):
+                        chosen = s
+                        break
+                if chosen:
+                    break
+            if not chosen and c_stations:
+                chosen = c_stations[0]
+
+            elem = chosen.get("WeatherElement", {})
+            now_elem = elem.get("Now", {})
+            raw_rain = now_elem.get("Precipitation") if isinstance(now_elem, dict) else None
+            # 特殊處理微量降雨 "T"
+            if str(raw_rain).strip() == "T":
+                rainfall = 0.0
+            else:
+                raw_rf = parse_float_safe(raw_rain)
+                rainfall = round(raw_rf, 1) if raw_rf is not None and raw_rf >= 0 else None
+
+            raw_temp = parse_float_safe(elem.get("AirTemperature"))
+            temp = round(raw_temp, 1) if raw_temp is not None and -40 <= raw_temp <= 60 else None
+
+            raw_rh = parse_float_safe(elem.get("RelativeHumidity"))
+            rh = int(round(raw_rh)) if raw_rh is not None and 0 <= raw_rh <= 100 else None
+
+            raw_ws = parse_float_safe(elem.get("WindSpeed"))
+            ws = round(raw_ws, 1) if raw_ws is not None and raw_ws >= 0 else None
+
+            raw_wd = parse_float_safe(elem.get("WindDirection"))
+            wd = round(raw_wd, 1) if raw_wd is not None and 0 <= raw_wd <= 360 else None
+
+            raw_uvi = parse_float_safe(elem.get("UVIndex"))
+            realtime_uvi = round(raw_uvi, 1) if raw_uvi is not None and raw_uvi >= 0 else None
+
+            # 測站站號對應 O-A0005-001 今日測得之最大紫外線指數
+            sid = chosen.get("StationId") or chosen.get("StationID")
+            peak_uvi = stn_uv_map.get(sid)
+            # 若即時數值為夜間 0，優先使用今日測得之 peak_uvi
+            effective_uvi = peak_uvi if peak_uvi is not None else realtime_uvi
+            uv_level = get_uv_level_desc(effective_uvi) if effective_uvi is not None else None
+
+            raw_time = chosen.get("ObsTime", {}).get("DateTime", "")
+            obs_time = raw_time.replace("T", " ")[:16] if raw_time else None
+
+            county_obs[c_name] = {
+                "rainfall": rainfall,
+                "temp": temp,
+                "humidity": rh,
+                "windSpeed": ws,
+                "windDirection": wd,
+                "windCompass": deg_to_compass(wd),
+                "uvIndex": effective_uvi,
+                "realtimeUvi": realtime_uvi,
+                "peakUvi": peak_uvi,
+                "uvLevel": uv_level,
+                "obsTime": obs_time,
+                "stationName": chosen.get("StationName", c_name)
+            }
+    except Exception:
+        # API 異常時不 crash，返回空字典
+        pass
+
+    return county_obs
 
 
 def fetch_weather_alerts():
@@ -281,7 +578,6 @@ def fetch_weather_alerts():
         data = http_get_json(url, timeout=10)
         if data:
             records = data.get("records", {}).get("record", [])
-            # 整理特報格式
             formatted_alerts = []
             for r in records:
                 formatted_alerts.append({
@@ -298,31 +594,52 @@ def fetch_weather_alerts():
     return []
 
 
-def fetch_weather_data():
-    """主要資料取得函式，連線至 CWA API。"""
-    url = f"{URL_COUNTIES}?Authorization={CWA_API_KEY}&format=JSON"
+def fetch_all_weather_data():
+    """使用平行連線取得 CWA 預報、即時觀測、紫外線觀測與特報，大幅提升反應速度與容錯率。"""
+    cwa_forecast_json = None
+    county_obs = {}
+    alerts = []
+
+    def fetch_forecast():
+        url = f"{URL_COUNTIES}?Authorization={CWA_API_KEY}&format=JSON"
+        return http_get_json(url, timeout=12)
+
+    try:
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            fut_forecast = executor.submit(fetch_forecast)
+            fut_uv_obs = executor.submit(fetch_uv_observations)
+            fut_alerts = executor.submit(fetch_weather_alerts)
+
+            # 先取得 UV 測站資料以傳給觀測解析
+            uv_stn_data = fut_uv_obs.result()
+            fut_obs = executor.submit(fetch_realtime_observations, uv_stn_data)
+
+            cwa_forecast_json = fut_forecast.result()
+            county_obs = fut_obs.result()
+            alerts = fut_alerts.result()
+    except Exception:
+        pass
+
     data = None
     is_live = False
 
-    try:
-        cwa_json = http_get_json(url, timeout=20)
-        if cwa_json:
-            data = transform_cwa_response(cwa_json)
+    if cwa_forecast_json:
+        try:
+            data = transform_cwa_response(cwa_forecast_json, county_obs)
             if data and len(data) > 0:
                 is_live = True
-    except Exception:
-        pass
+        except Exception:
+            pass
 
     if not data:
         data = generate_fallback_data()
 
-    return data, is_live
+    return data, is_live, alerts
 
 
 # ── Vercel Handler ──────────────────────────────────
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        # 快取控制設為 60 秒，確保使用者即時更新
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -333,8 +650,7 @@ class handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         query_params = parse_qs(parsed.query)
 
-        data, is_live = fetch_weather_data()
-        alerts = fetch_weather_alerts()
+        data, is_live, alerts = fetch_all_weather_data()
 
         # 若目前氣象署無特報且使用者請求展示，提供示範警報資料供驗證
         if query_params.get("demo_alert", ["0"])[0] == "1" and not alerts:
@@ -342,10 +658,18 @@ class handler(BaseHTTPRequestHandler):
                 {
                     "locationName": "苗栗縣、臺中市、彰化縣、雲林縣、嘉義縣、臺南市、澎湖縣",
                     "phenomena": "陸上強風特報",
+                    "significance": "橙色燈號",
+                    "contentText": "東北風明顯偏強，苗栗至臺南沿海空曠地區、恆春半島及澎湖、金門、綠島、蘭嶼易有9至10級強陣風，請特別注意安全。山區及高樓附近亦有陣風加強之情形，戶外活動請謹慎防範。",
+                    "startTime": datetime.datetime.now().strftime("%Y-%m-%dT%H:00:00"),
+                    "endTime": (datetime.datetime.now() + datetime.timedelta(days=1)).strftime("%Y-%m-%dT23:59:00")
+                },
+                {
+                    "locationName": "宜蘭縣山區、花蓮縣山區、南投縣山區、嘉義縣山區、高雄市山區、屏東縣山區",
+                    "phenomena": "大雨特報",
                     "significance": "黃色燈號",
-                    "contentText": "東北風明顯偏強，苗栗至臺南沿海空曠地區、恆春半島及澎湖、金門、綠島、蘭嶼易有9至10級強陣風，請特別注意安全。",
-                    "startTime": datetime.datetime.now().strftime("%Y-%m-%d %H:00:00"),
-                    "endTime": (datetime.datetime.now() + datetime.timedelta(days=1)).strftime("%Y-%m-%d 23:59:59")
+                    "contentText": "鋒面及旺盛西南氣流影響，上述地區易有短延時強降雨，預測24小時累積雨量可達80毫米以上，部分山區可能超過200毫米，請注意土石流及山洪暴發等災害，並請低窪地區慎防積淹水。",
+                    "startTime": datetime.datetime.now().strftime("%Y-%m-%dT%H:00:00"),
+                    "endTime": (datetime.datetime.now() + datetime.timedelta(hours=18)).strftime("%Y-%m-%dT%H:00:00")
                 }
             ]
 
@@ -369,3 +693,11 @@ class handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
+
+
+if __name__ == "__main__":
+    # 本地測試執行
+    d, live, al = fetch_all_weather_data()
+    print(f"Live: {live}, Total Locations: {len(d)}, Alerts: {len(al)}")
+    for item in d[:3]:
+        print(item["name"], item["type"], "Obs:", item.get("observation"))

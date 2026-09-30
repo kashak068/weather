@@ -99,10 +99,10 @@
             <div class="sidebar-divider"></div>
 
             <div class="sidebar-info">
-                <p><strong>資料來源</strong>: 交通部中央氣象署 (CWA)</p>
-                <p><strong>涵蓋範圍</strong>: 全台 22 縣市 + 大分區</p>
-                <p><strong>預報長度</strong>: 未來 14 天 (兩週) 滾動預報</p>
-                <p><strong>觀測項目</strong>: 氣溫 · 特報 · 風速 · 風向</p>
+                <p><strong>資料來源</strong>: 交通部中央氣象署 (CWA) 唯一官方資料</p>
+                <p><strong>涵蓋範圍</strong>: 全台 22 縣市 + 六大分區</p>
+                <p><strong>獨立圖層</strong>: 降雨量 · 風向風速 · 紫外線指數 (UVI)</p>
+                <p><strong>預報長度</strong>: 未來 14 天 (兩週) 氣溫與氣候走勢</p>
             </div>
         </aside>
 
@@ -111,39 +111,158 @@
             <!-- Tab Navigation -->
             <div class="tab-nav" id="tab-nav">
                 <button class="tab-btn active" data-tab="map-tab" id="tab-btn-map">
-                    🗺️ 全台氣溫地圖視覺化
+                    🗺️ 全台氣象多圖層地圖 (降雨 / 風況 / 紫外線)
                 </button>
                 <button class="tab-btn" data-tab="chart-tab" id="tab-btn-chart">
-                    📈 14 天氣溫走勢與詳細數據
+                    📈 14 天氣象走勢與詳細數據
                 </button>
             </div>
 
             <!-- Tab: Map -->
             <div class="tab-content active" id="map-tab">
-                <h2 class="section-title" id="map-title">📍 臺灣全台 22 縣市即時氣溫分布圖</h2>
+                <div class="map-header-bar">
+                    <div class="map-title-wrap">
+                        <h2 class="section-title" id="map-title">📍 臺灣全台 22 縣市即時氣象圖層觀測</h2>
+                        <span class="cwa-source-tag">中央氣象署 CWA API 唯一資料來源</span>
+                    </div>
+                    <div class="layer-control-wrap" id="layer-control-wrap">
+                        <div class="layer-control-top">
+                            <span class="layer-label">獨立氣象圖層開關：</span>
+                            <div class="layer-quick-tools">
+                                <button type="button" class="quick-tool-btn" id="btn-layers-all" onclick="toggleAllLayers(true)" title="開啟全部圖層">全開</button>
+                                <button type="button" class="quick-tool-btn" id="btn-layers-none" onclick="toggleAllLayers(false)" title="關閉全部圖層">重設</button>
+                            </div>
+                        </div>
+                        <div class="layer-toggle-group" id="layer-toggle-group" role="group" aria-label="獨立氣象圖層選擇">
+                            <!-- 降雨量圖層 (Rainfall) -->
+                            <button type="button" class="layer-toggle-btn active" data-layer="rain" id="layer-toggle-rain" aria-pressed="true" title="獨立切換降雨量圖層">
+                                <span class="layer-toggle-pill on">ON</span>
+                                <span class="layer-toggle-icon">🌧️</span>
+                                <span class="layer-toggle-name">降雨量</span>
+                            </button>
+                            <!-- 風向與風速圖層 (Wind) -->
+                            <button type="button" class="layer-toggle-btn active" data-layer="wind" id="layer-toggle-wind" aria-pressed="true" title="獨立切換風向風速圖層">
+                                <span class="layer-toggle-pill on">ON</span>
+                                <span class="layer-toggle-icon">💨</span>
+                                <span class="layer-toggle-name">風向與風速</span>
+                            </button>
+                            <!-- 紫外線指數圖層 (UV Index) -->
+                            <button type="button" class="layer-toggle-btn active" data-layer="uv" id="layer-toggle-uv" aria-pressed="true" title="獨立切換紫外線指數圖層">
+                                <span class="layer-toggle-pill on">ON</span>
+                                <span class="layer-toggle-icon">☀️</span>
+                                <span class="layer-toggle-name">紫外線指數</span>
+                            </button>
+                            <!-- 氣溫圖層 (Temperature) -->
+                            <button type="button" class="layer-toggle-btn" data-layer="temp" id="layer-toggle-temp" aria-pressed="false" title="獨立切換氣溫圖層">
+                                <span class="layer-toggle-pill off">OFF</span>
+                                <span class="layer-toggle-icon">🌡️</span>
+                                <span class="layer-toggle-name">氣溫</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="map-layout">
                     <div class="map-container">
                         <div id="weather-map" class="weather-map"></div>
                     </div>
                     <div class="map-sidebar">
-                        <!-- Legend -->
-                        <div class="clean-card">
-                            <div class="card-title">🌡️ 氣溫色階圖例</div>
-                            <div class="temp-bar-gradient"></div>
-                            <div class="temp-bar-labels">
-                                <span>&lt;18°C (涼冷)</span>
-                                <span>23°C (舒適)</span>
-                                <span>&gt;28°C (炎熱)</span>
+                        <!-- Multi-Legend Container: dynamically displays legends for active layers -->
+                        <div class="legends-stack" id="legends-stack">
+                            
+                            <!-- 🌧️ Rainfall Legend -->
+                            <div class="clean-card legend-box active" id="legend-rain-card">
+                                <div class="card-title">
+                                    <span>🌧️ 降雨量圖例 (Rainfall)</span>
+                                    <span class="legend-badge-unit">毫米 mm</span>
+                                </div>
+                                <div class="legend-bar rain-bar" id="legend-rain-bar"></div>
+                                <div class="legend-labels">
+                                    <span>無雨 0</span>
+                                    <span>微量 2</span>
+                                    <span>小雨 10</span>
+                                    <span>中雨 30</span>
+                                    <span>大雨 80</span>
+                                    <span>&gt;80 豪雨</span>
+                                </div>
+                                <div class="card-hint">
+                                    💧 <b>雨量觀測</b>：中央氣象署測站即時降雨量。水滴數值標記代表即時雨量，顏色越深降雨越顯著。
+                                </div>
                             </div>
-                            <hr class="card-divider">
-                            <div class="card-hint">
-                                💡 <b>操作說明</b>：<br>
-                                地圖標記顯示各地氣溫數值，點擊任一標記可查看最高溫、最低溫與<b>風速風向資訊</b>。
+
+                            <!-- 💨 Wind Legend -->
+                            <div class="clean-card legend-box active" id="legend-wind-card">
+                                <div class="card-title">
+                                    <span>💨 風向與風速圖例 (Wind)</span>
+                                    <span class="legend-badge-unit">m/s · 蒲福風級</span>
+                                </div>
+                                <div class="wind-legend-demo">
+                                    <span class="wind-demo-arrow">➤</span>
+                                    <span class="wind-demo-text">動態箭頭順應氣象風向角度即時指向</span>
+                                </div>
+                                <div class="legend-bar wind-bar" id="legend-wind-bar"></div>
+                                <div class="legend-labels">
+                                    <span>&lt;3 靜風</span>
+                                    <span>8 輕/和風</span>
+                                    <span>14 強風</span>
+                                    <span>20 疾風</span>
+                                    <span>&gt;20 暴風</span>
+                                </div>
+                                <div class="card-hint">
+                                    💨 <b>風況標記</b>：動態箭頭即時順風轉向，色標對應蒲福風級強度。
+                                </div>
+                            </div>
+
+                            <!-- ☀️ UV Index Legend -->
+                            <div class="clean-card legend-box active" id="legend-uv-card">
+                                <div class="card-title">
+                                    <span>☀️ 紫外線指數圖例 (UV Index)</span>
+                                    <span class="legend-badge-unit">UVI · WHO標準</span>
+                                </div>
+                                <div class="legend-bar uv-bar" id="legend-uv-bar"></div>
+                                <div class="legend-labels uv-labels">
+                                    <span style="color:#16A34A">0-2 低</span>
+                                    <span style="color:#CA8A04">3-5 中</span>
+                                    <span style="color:#EA580C">6-7 高</span>
+                                    <span style="color:#DC2626">8-10 過量</span>
+                                    <span style="color:#9333EA">11+ 危險</span>
+                                </div>
+                                <div class="card-hint">
+                                    ☀️ <b>防曬指南</b>：高量級 (6-7) 曝曬 20 分鐘即有曬傷風險；過量/危險級建議避免 10-14 點烈日下活動。
+                                </div>
+                            </div>
+
+                            <!-- 🌡️ Temperature Legend -->
+                            <div class="clean-card legend-box" id="legend-temp-card" style="display:none;">
+                                <div class="card-title">
+                                    <span>🌡️ 氣溫色階圖例 (Temperature)</span>
+                                    <span class="legend-badge-unit">攝氏度 °C</span>
+                                </div>
+                                <div class="legend-bar temp-bar-gradient"></div>
+                                <div class="legend-labels">
+                                    <span>&lt;18°C (涼冷)</span>
+                                    <span>23°C (舒適)</span>
+                                    <span>&gt;28°C (炎熱)</span>
+                                </div>
+                                <div class="card-hint">
+                                    🌡️ <b>氣溫分布</b>：中央氣象署預報溫度色標。
+                                </div>
+                            </div>
+
+                            <!-- Empty Notice -->
+                            <div class="clean-card legend-empty-card" id="legend-empty-card" style="display:none;">
+                                <div class="empty-icon">🗺️</div>
+                                <div class="empty-title">目前所有圖層皆已關閉</div>
+                                <div class="empty-desc">請點擊上方按鈕開啟 <b>降雨量</b>、<b>風向風速</b> 或 <b>紫外線指數</b> 圖層以檢視地圖標記。</div>
                             </div>
                         </div>
+
                         <!-- Current Selection Card -->
                         <div class="clean-card" id="selected-card" style="display:none;">
-                            <div class="selected-label">當前選定觀測點</div>
+                            <div class="selected-header-row">
+                                <div class="selected-label">當前選定觀測點</div>
+                                <div class="selected-source-tag">CWA 觀測</div>
+                            </div>
                             <div class="selected-name" id="selected-name">--</div>
                             <div class="selected-temp" id="selected-temp">--</div>
                             <div class="selected-range">
@@ -151,16 +270,37 @@
                                 <span>最高溫: <b class="temp-high" id="selected-max">--</b></span>
                             </div>
                             <hr class="card-mini-divider">
-                            <div class="selected-wind-info">
-                                <div class="wind-info-item">
-                                    <span class="wind-icon">💨</span>
-                                    <span class="wind-text">風速: <strong id="selected-ws">--</strong></span>
+                            <div class="selected-metrics-grid">
+                                <div class="metric-info-item metric-rain">
+                                    <span class="metric-icon">🌧️</span>
+                                    <div class="metric-detail">
+                                        <span class="metric-label">即時雨量</span>
+                                        <strong class="metric-val" id="selected-rain">--</strong>
+                                    </div>
                                 </div>
-                                <div class="wind-info-item">
-                                    <span class="wind-icon">🧭</span>
-                                    <span class="wind-text">風向: <strong id="selected-wd">--</strong></span>
+                                <div class="metric-info-item metric-wind">
+                                    <span class="metric-icon">💨</span>
+                                    <div class="metric-detail">
+                                        <span class="metric-label">風速與風向</span>
+                                        <strong class="metric-val" id="selected-wind-summary">--</strong>
+                                    </div>
+                                </div>
+                                <div class="metric-info-item metric-uv">
+                                    <span class="metric-icon">☀️</span>
+                                    <div class="metric-detail">
+                                        <span class="metric-label">紫外線指數</span>
+                                        <strong class="metric-val" id="selected-uv">--</strong>
+                                    </div>
+                                </div>
+                                <div class="metric-info-item metric-rh">
+                                    <span class="metric-icon">💧</span>
+                                    <div class="metric-detail">
+                                        <span class="metric-label">相對濕度</span>
+                                        <strong class="metric-val" id="selected-rh">--</strong>
+                                    </div>
                                 </div>
                             </div>
+                            <div class="selected-station-note" id="selected-station-note">--</div>
                         </div>
                     </div>
                 </div>
@@ -168,7 +308,7 @@
 
             <!-- Tab: Chart -->
             <div class="tab-content" id="chart-tab">
-                <h2 class="section-title" id="chart-title">📍 -- · 未來 14 天高低溫走勢</h2>
+                <h2 class="section-title" id="chart-title">📍 -- · 未來 14 天氣象走勢</h2>
 
                 <!-- KPI Cards -->
                 <div class="kpi-row" id="kpi-row">
@@ -195,6 +335,11 @@
                         <div class="kpi-value kpi-wind" id="kpi-wind">--</div>
                         <div class="kpi-delta" id="kpi-wind-dir">--</div>
                     </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">今日紫外線指標</div>
+                        <div class="kpi-value kpi-uv" id="kpi-uv">--</div>
+                        <div class="kpi-delta" id="kpi-uv-level">--</div>
+                    </div>
                 </div>
 
                 <div class="chart-divider"></div>
@@ -218,6 +363,7 @@
                                         <th>平均溫 (°C)</th>
                                         <th>💨 風速</th>
                                         <th>🧭 風向</th>
+                                        <th>☀️ 紫外線</th>
                                     </tr>
                                 </thead>
                                 <tbody id="forecast-tbody">
