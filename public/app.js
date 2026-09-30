@@ -13,6 +13,7 @@ let currentLoc   = "臺北市";
 let map          = null;
 let tempChart    = null;
 let isDemoAlert  = false;
+let isDemoNowcast = false;
 
 // ── Independent Layer States ──────────────────────
 // Users can independently turn each layer on or off
@@ -429,21 +430,28 @@ function rebuildLocationSelect() {
 // ── Load Data ──────────────────────────────────────
 async function loadData(isSync = false) {
   try {
-    const query = isDemoAlert ? "?demo_alert=1" : (isSync ? `?refresh=1&t=${Date.now()}` : "");
+    let params = [];
+    if (isDemoAlert) params.push("demo_alert=1");
+    if (isDemoNowcast) params.push("demo_nowcast=1");
+    if (isSync) { params.push("refresh=1"); params.push(`t=${Date.now()}`); }
+    const query = params.length > 0 ? "?" + params.join("&") : "";
     const res = await fetch(`/api/weather${query}`);
     const json = await res.json();
     if (json.success && json.locations) {
       allLocations = json.locations;
       renderAlerts(json.alerts || [], json.alertStatus);
+      renderNowcast(json.nowcastMessages || [], json.nowcastStatus);
       if (json.updatedAt) updateTime(json.updatedAt);
     } else {
       allLocations = json.locations || json || [];
       renderAlerts(json.alerts || [], json.alertStatus);
+      renderNowcast(json.nowcastMessages || [], json.nowcastStatus);
     }
   } catch (err) {
     console.error("Failed to fetch weather data:", err);
     allLocations = generateFallback();
     renderAlerts([], "CLEAR");
+    renderNowcast([], "CLEAR");
   }
 
   hideLoading();
@@ -1210,5 +1218,87 @@ function renderAlerts(alerts, alertStatus) {
           ⚡ 預覽示範警報公報
         </button>
       </div>`;
+  }
+}
+
+// ── Nowcast Weather Messages Rendering (CWA W-C0034-001 CAP) ──
+function toggleDemoNowcast() {
+  isDemoNowcast = !isDemoNowcast;
+  loadData();
+}
+
+function renderNowcast(nowcasts, nowcastStatus) {
+  const container = document.getElementById("nowcast-container");
+  const statusPill = document.getElementById("nowcast-status-pill");
+  const statusDot  = document.getElementById("nowcast-status-dot");
+  const statusText = document.getElementById("nowcast-status-text");
+
+  if (!container) return;
+
+  if (nowcasts && nowcasts.length > 0) {
+    if (statusDot)  statusDot.className  = "nowcast-status-dot active";
+    if (statusText) statusText.textContent = `${nowcasts.length} 則即時訊息`;
+    if (statusPill) statusPill.className = "nowcast-status-pill active";
+
+    const cardsHtml = nowcasts.map((item, idx) => {
+      const event = item.event || "即時天氣訊息";
+      const headline = item.headline || "";
+      const effective = item.effective ? item.effective.replace("T", " ").slice(0, 16) : "";
+      const expires = item.expires ? item.expires.replace("T", " ").slice(0, 16) : "";
+      const sender = item.senderName || "交通部中央氣象署";
+
+      const sectionsHtml = (item.sections && item.sections.length > 0)
+        ? item.sections.map(s => `
+            <div class="nowcast-section-card">
+              <div class="nowcast-section-title">
+                <span>📌</span>
+                <span>${s.title}</span>
+              </div>
+              <div class="nowcast-section-val">${s.value}</div>
+            </div>
+          `).join("")
+        : `<div class="nowcast-section-card"><div class="nowcast-section-val">詳細訊息請參閱中央氣象署官方說明。</div></div>`;
+
+      return `
+        <div class="nowcast-bulletin-wrap">
+          <div class="nowcast-bulletin-header">
+            <div class="nowcast-header-left">
+              <span class="nowcast-event-badge">📢 ${event}</span>
+              <span class="nowcast-headline-text">${headline}</span>
+            </div>
+            <div class="nowcast-header-right">
+              ${effective ? `<span class="nowcast-time-badge">有效時間：${effective} ${expires ? '至 ' + expires : ''}</span>` : ""}
+            </div>
+          </div>
+          <div class="nowcast-body-content">
+            ${sectionsHtml}
+          </div>
+          <div class="nowcast-footer-info">
+            <span>資料來源：${sender} ｜ 資料集：W-C0034-001 即時天氣訊息 (CAP)</span>
+            <button class="nowcast-demo-btn" onclick="toggleDemoNowcast()" style="padding: 2px 8px; font-size: 11px;">
+              ${isDemoNowcast ? "✕ 關閉測試" : "模擬測試"}
+            </button>
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    container.innerHTML = cardsHtml;
+  } else {
+    if (statusDot)  statusDot.className  = "nowcast-status-dot";
+    if (statusText) statusText.textContent = "即時訊息：正常";
+    if (statusPill) statusPill.className = "nowcast-status-pill";
+
+    container.innerHTML = `
+      <div class="nowcast-banner-normal">
+        <div class="nowcast-normal-content">
+          <span class="nowcast-normal-icon">📢</span>
+          <span><strong>即時天氣訊息 (Nowcast)：</strong>中央氣象署目前無突發性劇烈天氣訊息發布 (W-C0034-001 即時連線)。</span>
+        </div>
+        <button class="nowcast-demo-btn" onclick="toggleDemoNowcast()" title="模擬即時天氣訊息發布效果">
+          ⚡ 預覽即時天氣訊息範例
+        </button>
+      </div>
+    `;
   }
 }

@@ -22,6 +22,7 @@ URL_COUNTIES = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-D0047-091"
 URL_OBSERVATIONS = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/O-A0003-001"
 URL_UV_OBSERVATIONS = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/O-A0005-001"
 URL_ALERTS = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/W-C0033-002"
+URL_NOWCAST = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/W-C0034-001"
 TARGET_DAYS = 14
 
 # 六大目標區域與對應縣市
@@ -594,21 +595,61 @@ def fetch_weather_alerts():
     return []
 
 
+def fetch_nowcast_messages():
+    """從 CWA 取得即時天氣訊息 (W-C0034-001 CAP 示警協定)。"""
+    url = f"{URL_NOWCAST}?Authorization={CWA_API_KEY}&format=JSON"
+    try:
+        data = http_get_json(url, timeout=10)
+        if data:
+            records = data.get("records", {}).get("info", [])
+            messages = []
+            for item in records:
+                desc = item.get("description", {})
+                sections = []
+                if isinstance(desc, dict):
+                    raw_sections = desc.get("section", [])
+                    for s in raw_sections:
+                        sections.append({
+                            "title": s.get("title", ""),
+                            "value": s.get("value", "")
+                        })
+                elif isinstance(desc, str):
+                    sections.append({"title": "詳細內容", "value": desc})
+
+                messages.append({
+                    "event": item.get("event", "即時天氣訊息"),
+                    "headline": item.get("headline", ""),
+                    "effective": item.get("effective", ""),
+                    "onset": item.get("onset", ""),
+                    "expires": item.get("expires", ""),
+                    "severity": item.get("severity", ""),
+                    "certainty": item.get("certainty", ""),
+                    "senderName": item.get("senderName", "交通部中央氣象署"),
+                    "sections": sections
+                })
+            return messages
+    except Exception:
+        pass
+    return []
+
+
 def fetch_all_weather_data():
-    """使用平行連線取得 CWA 預報、即時觀測、紫外線觀測與特報，大幅提升反應速度與容錯率。"""
+    """使用平行連線取得 CWA 預報、即時觀測、紫外線觀測、特報與即時天氣訊息。"""
     cwa_forecast_json = None
     county_obs = {}
     alerts = []
+    nowcast_msgs = []
 
     def fetch_forecast():
         url = f"{URL_COUNTIES}?Authorization={CWA_API_KEY}&format=JSON"
         return http_get_json(url, timeout=12)
 
     try:
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor(max_workers=5) as executor:
             fut_forecast = executor.submit(fetch_forecast)
             fut_uv_obs = executor.submit(fetch_uv_observations)
             fut_alerts = executor.submit(fetch_weather_alerts)
+            fut_nowcast = executor.submit(fetch_nowcast_messages)
 
             # 先取得 UV 測站資料以傳給觀測解析
             uv_stn_data = fut_uv_obs.result()
@@ -617,6 +658,7 @@ def fetch_all_weather_data():
             cwa_forecast_json = fut_forecast.result()
             county_obs = fut_obs.result()
             alerts = fut_alerts.result()
+            nowcast_msgs = fut_nowcast.result()
     except Exception:
         pass
 
@@ -634,7 +676,7 @@ def fetch_all_weather_data():
     if not data:
         data = generate_fallback_data()
 
-    return data, is_live, alerts
+    return data, is_live, alerts, nowcast_msgs
 
 
 # ── Vercel Handler ──────────────────────────────────
@@ -650,7 +692,7 @@ class handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         query_params = parse_qs(parsed.query)
 
-        data, is_live, alerts = fetch_all_weather_data()
+        data, is_live, alerts, nowcast_msgs = fetch_all_weather_data()
 
         # 若目前氣象署無特報且使用者請求展示，提供示範警報資料供驗證
         if query_params.get("demo_alert", ["0"])[0] == "1" and not alerts:
@@ -673,6 +715,26 @@ class handler(BaseHTTPRequestHandler):
                 }
             ]
 
+        # 若使用者請求展示即時天氣訊息，提供示範即時訊息供驗證
+        if query_params.get("demo_nowcast", ["0"])[0] == "1" and not nowcast_msgs:
+            nowcast_msgs = [
+                {
+                    "event": "大雷雨即時訊息",
+                    "headline": "旺盛發展的對流常伴隨打雷、閃電與劇烈降雨，請注意防範",
+                    "effective": datetime.datetime.now().strftime("%Y-%m-%dT%H:00:00+08:00"),
+                    "onset": datetime.datetime.now().strftime("%Y-%m-%dT%H:00:00+08:00"),
+                    "expires": (datetime.datetime.now() + datetime.timedelta(hours=2)).strftime("%Y-%m-%dT%H:00:00+08:00"),
+                    "severity": "Moderate",
+                    "certainty": "Observed",
+                    "senderName": "交通部中央氣象署",
+                    "sections": [
+                        {"title": "警戒範圍", "value": "臺北市、新北市、基隆市、桃園市山區及鄰近地區。"},
+                        {"title": "防範重點", "value": "請注意雷擊、9級以上強陣風及溪水暴漲，低窪地區請慎防淹水，進入室內避難。"},
+                        {"title": "最新動態", "value": "強對流雷雨胞目前正向東北偏北方向緩慢移動，預估主要劇烈降雨將持續約 1 至 1.5 小時。"}
+                    ]
+                }
+            ]
+
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         response = {
@@ -682,6 +744,8 @@ class handler(BaseHTTPRequestHandler):
             "totalLocations": len(data),
             "alertStatus": "ACTIVE" if alerts else "CLEAR",
             "alerts": alerts,
+            "nowcastStatus": "ACTIVE" if nowcast_msgs else "CLEAR",
+            "nowcastMessages": nowcast_msgs,
             "locations": data
         }
 
@@ -697,7 +761,9 @@ class handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     # 本地測試執行
-    d, live, al = fetch_all_weather_data()
-    print(f"Live: {live}, Total Locations: {len(d)}, Alerts: {len(al)}")
+    d, live, al, nowcasts = fetch_all_weather_data()
+    print(f"Live: {live}, Total Locations: {len(d)}, Alerts: {len(al)}, Nowcast Messages: {len(nowcasts)}")
+    if nowcasts:
+        print("First Nowcast Event:", nowcasts[0]["event"], nowcasts[0]["headline"])
     for item in d[:3]:
         print(item["name"], item["type"], "Obs:", item.get("observation"))

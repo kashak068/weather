@@ -468,7 +468,7 @@ def fetch_map_data(location_type: str = "county") -> pd.DataFrame:
     """從 CWA 即時觀測與預報資料彙整地圖所需之各項氣象指標 (雨量、風況、紫外線、氣溫)。"""
     try:
         from api.weather import fetch_all_weather_data, get_uv_level_desc, deg_to_compass
-        cwa_data, is_live, alerts = fetch_all_weather_data()
+        cwa_data, is_live, alerts, nowcast_msgs = fetch_all_weather_data()
         rows = []
         for loc in cwa_data:
             if loc.get("type") != location_type:
@@ -568,6 +568,60 @@ def fetch_map_data(location_type: str = "county") -> pd.DataFrame:
         return pd.DataFrame()
     finally:
         conn.close()
+
+
+def fetch_nowcast_messages():
+    """從 CWA 取得即時天氣訊息 (W-C0034-001 CAP 示警協定)。"""
+    try:
+        from api.weather import fetch_nowcast_messages as _fetch_nowcasts
+        return _fetch_nowcasts()
+    except Exception:
+        return []
+
+
+def render_cwa_nowcast_bulletin(nowcasts: list):
+    """呈現中央氣象署即時天氣訊息 (W-C0034-001)。"""
+    if not nowcasts:
+        st.markdown("""
+            <div style="background: #ECFEFF; border: 1px solid #A5F3FC; border-left: 5px solid #06B6D4; border-radius: 8px; padding: 12px 18px; margin-bottom: 16px; font-size: 13px; color: #0E7490; display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 16px;">📢</span>
+                <span><b>即時天氣訊息 (Nowcast)：</b>中央氣象署目前無突發性劇烈天氣訊息發布 (W-C0034-001 即時連線)。</span>
+            </div>
+        """, unsafe_allow_html=True)
+        return
+
+    for item in nowcasts:
+        event = item.get("event", "即時天氣訊息")
+        headline = item.get("headline", "")
+        effective = item.get("effective", "").replace("T", " ")[:16]
+        expires = item.get("expires", "").replace("T", " ")[:16]
+        sender = item.get("senderName", "交通部中央氣象署")
+        sections = item.get("sections", [])
+
+        st.markdown(f"""
+            <div style="border-radius: 8px; overflow: hidden; border: 1.5px solid #67E8F9; box-shadow: 0 4px 14px rgba(6, 182, 212, 0.15); margin-bottom: 16px;">
+                <div style="background: linear-gradient(100deg, #0F172A 0%, #0369A1 50%, #0284C7 100%); padding: 12px 20px; color: #FFFFFF; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="background: #F59E0B; color: #1E293B; font-size: 12px; font-weight: 800; padding: 3px 10px; border-radius: 12px;">📢 {event}</span>
+                        <span style="font-size: 16px; font-weight: 700;">{headline}</span>
+                    </div>
+                    <span style="font-size: 12px; color: #E0F2FE;">有效時間：{effective} 至 {expires}</span>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+
+        if sections:
+            with st.expander(f"📋 查看 {event} 詳細章節與防範指南", expanded=True):
+                sec_cols = st.columns(min(len(sections), 3))
+                for i, sec in enumerate(sections):
+                    target_col = sec_cols[i % len(sec_cols)]
+                    target_col.markdown(f"""
+                        <div class="clean-card" style="border-left: 3px solid #0284C7; padding: 10px 14px; margin-bottom: 10px;">
+                            <div style="font-size: 13px; font-weight: 700; color: #0369A1; margin-bottom: 4px;">📌 {sec.get('title')}</div>
+                            <div style="font-size: 12px; color: #334155; line-height: 1.6;">{sec.get('value')}</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                st.caption(f"資料來源：{sender} ｜ 資料集：W-C0034-001 即時天氣訊息 (CAP-TWP 示警協定)")
 
 
 def fetch_weather_alerts():
@@ -1163,6 +1217,9 @@ def main():
             </div>
         </div>
     """, unsafe_allow_html=True)
+
+    nowcasts = fetch_nowcast_messages()
+    render_cwa_nowcast_bulletin(nowcasts)
 
     alerts = fetch_weather_alerts()
     render_cwa_alert_bulletin(alerts)

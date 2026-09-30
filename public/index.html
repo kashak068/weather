@@ -45,6 +45,10 @@
                     <span class="green-dot"></span>
                     CWA API ONLINE
                 </span>
+                <span class="nowcast-status-pill" id="nowcast-status-pill">
+                    <span class="nowcast-status-dot" id="nowcast-status-dot"></span>
+                    <span id="nowcast-status-text">即時訊息連線</span>
+                </span>
                 <span class="alert-status-pill" id="alert-status-pill">
                     <span class="alert-status-dot" id="alert-status-dot"></span>
                     <span id="alert-status-text">特報監控中</span>
@@ -53,6 +57,9 @@
             <p class="banner-time" id="banner-time">資料時間: --</p>
         </div>
     </header>
+
+    <!-- ═══════════ Nowcast (即時天氣訊息) Container ═══════════ -->
+    <div id="nowcast-container" class="nowcast-container"></div>
 
     <!-- ═══════════ Alerts Container ═══════════ -->
     <div id="alerts-container" class="alerts-container"></div>
