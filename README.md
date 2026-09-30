@@ -2,7 +2,8 @@
 
 <img width="1905" height="948" alt="image" src="https://github.com/user-attachments/assets/940468d6-4c7c-4f8a-9428-2d52fc6cc950" />
 <img width="1916" height="775" alt="image" src="https://github.com/user-attachments/assets/0bcaa6ac-6cd2-4f85-b8bd-222c8e75bc34" />
-![Uploading image.png…]()
+<img width="1910" height="866" alt="image" src="https://github.com/user-attachments/assets/e6974a78-406b-41dc-bbe8-70139c429ef9" />
+
 
 
 > **線上展示網址**：https://weather-nine-rho-24.vercel.app/  
